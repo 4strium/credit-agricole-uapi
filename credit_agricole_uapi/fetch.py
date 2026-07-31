@@ -1,4 +1,3 @@
-import secrets
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -8,29 +7,13 @@ from urllib.parse import urlparse
 import httpx
 import json
 import sys
+import uuid
 
 from credit_agricole_uapi.preferences import load_preferences
 
-# Unique client HTTP partagé par toute l'application (authentification,
-# serveur API et tâche de keep-alive). Il est construit une seule fois -
-# une fois la session Playwright stabilisée - puis réutilisé pour tous les
-# appels ultérieurs.
-#
-# Le serveur du Crédit Agricole pratique une rotation systématique du
-# jeton anti-CSRF : chaque réponse renvoie, via `Set-Cookie`, un nouveau
-# `XSRF-TOKEN` qui doit être utilisé pour la requête suivante. En gardant
-# un unique `httpx.Client`, son cookie jar est automatiquement mis à jour
-# par httpx à chaque réponse, exactement comme le ferait un navigateur.
-# Il suffit donc de relire le cookie courant juste avant chaque requête
-# pour toujours envoyer le jeton le plus récent.
-_client: httpx.Client | None = None
+_clients: dict[str, httpx.Client] = {}
+_raw_cookies: list[Mapping[str, Any]] = []
 _client_lock = threading.Lock()
-
-
-def generate_traceparent() -> str:
-    trace_id = secrets.token_hex(16)
-    parent_id = secrets.token_hex(8)
-    return f"00-{trace_id}-{parent_id}-01"
 
 
 def _default_headers() -> dict:
@@ -56,101 +39,137 @@ def build_cookie_jar(raw_cookies: Iterable[Mapping[str, Any]]) -> httpx.Cookies:
     return jar
 
 
-def init_client(raw_cookies: Iterable[Mapping[str, Any]]) -> httpx.Client:
-    """(Ré)initialise l'unique client HTTP persistant de l'application.
-
-    IMPORTANT : `raw_cookies` doit impérativement être capturé APRÈS
-    stabilisation complète du réseau côté navigateur (plus aucun appel API
-    en cours - typiquement `page.wait_for_load_state("networkidle")` suivi
-    d'une marge de sécurité). Capturer les cookies trop tôt figerait un
-    jeton XSRF-TOKEN déjà obsolète, invalidé par une rotation ultérieure
-    côté serveur.
+def init_client(raw_cookies: Iterable[Mapping[str, Any]]) -> None:
     """
-    global _client
+    Initialise les clients HTTP par domaine avec les cookies fournis.
+    """
+    global _raw_cookies, _clients
     with _client_lock:
-        if _client is not None:
-            _client.close()
-        _client = httpx.Client(
-            cookies=build_cookie_jar(raw_cookies),
+        for client in _clients.values():
+            client.close()
+        _clients.clear()
+        _raw_cookies = list(raw_cookies)
+
+
+def _get_or_create_client_for(url: str) -> httpx.Client:
+    """
+    Retourne le client HTTP pour le domaine de l'URL, le crée s'il n'existe pas.
+    Doit être appelée sous _client_lock pour éviter les races.
+    """
+    host = urlparse(url).netloc
+    if host not in _clients:
+        domain_cookies = [c for c in _raw_cookies if _cookie_matches_host(c, host)]
+        _clients[host] = httpx.Client(
+            cookies=build_cookie_jar(domain_cookies),
             headers=_default_headers(),
             timeout=30.0,
         )
-    return _client
+    return _clients[host]
 
 
-def get_client() -> httpx.Client:
-    if _client is None:
-        raise RuntimeError(
-            "Le client HTTP n'a pas encore été initialisé. "
-            "Appelez fetch.init_client(...) une fois la session stabilisée."
-        )
-    return _client
+def _cookie_matches_host(cookie: Mapping[str, Any], host: str) -> bool:
+    """
+    Vérifie si un cookie s'applique à un host donné.
+    """
+    cookie_domain = cookie.get("domain", "").rstrip("/")
+    if not cookie_domain:
+        return True
+    if cookie_domain == host:
+        return True
+    if cookie_domain.startswith(".") and host.endswith(cookie_domain):
+        return True
+    if cookie_domain.lstrip(".") == host:
+        return True
+    return False
 
 
 def is_client_ready() -> bool:
-    return _client is not None
+    return bool(_raw_cookies)
 
 
-def _current_xsrf_token(client: httpx.Client, target_url: str) -> str:
-    """Relit le jeton XSRF-TOKEN courant depuis le cookie jar du client.
-
-    C'est cette relecture systématique - juste avant chaque requête - qui
-    permet de suivre la rotation de jeton effectuée par le serveur : le
-    nouveau jeton arrive via `Set-Cookie` dans chaque réponse et est
-    absorbé automatiquement dans `client.cookies` par httpx.
+def _current_xsrf_token(client: httpx.Client) -> str:
     """
-    target_domain = urlparse(target_url).netloc
+    Relit le jeton XSRF-TOKEN courant depuis le cookie jar du client.
+    """
     for cookie in client.cookies.jar:
-        if (
-            "XSRF-TOKEN" in cookie.name
-            and cookie.domain.endswith("credit-agricole.fr")
-            and cookie.domain.lstrip(".") in target_domain
-        ):
+        if cookie.name == "XSRF-TOKEN":
             return cookie.value or ""
     return ""
 
 
-def call_ca_client_rest_api(url: str):
-    """Appelle l'API REST du Crédit Agricole via l'unique client HTTP
-    persistant de l'application.
-
-    Les appels sont sérialisés via un verrou afin d'éviter toute course
-    entre deux requêtes concurrentes (ex: un appel API utilisateur et le
-    keep-alive périodique) pendant une rotation du jeton anti-CSRF.
+def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
+    """
+    Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine.
     """
     with _client_lock:
-        client = get_client()
-        headers = {"X-XSRF-TOKEN": _current_xsrf_token(client, url)}
+        if not _raw_cookies:
+            raise RuntimeError(
+                "Le client HTTP n'a pas encore été initialisé. "
+                "Appelez fetch.init_client(...) une fois la session stabilisée."
+            )
+
+        client = _get_or_create_client_for(url)
+
+        headers = {"X-XSRF-TOKEN": _current_xsrf_token(client)}
+        if extra_headers:
+            headers.update(extra_headers)
+
         response = client.get(url, headers=headers)
 
         if response.status_code in (200, 204):
-            # 1. Gestion des réponses vides (keepalive, absence de crédits/prêts, etc.)
             if not response.content or not response.content.strip():
                 return {}
 
-            # 2. Parsing du JSON avec secours si le contenu n'est pas au format JSON
             try:
                 return response.json()
             except (json.JSONDecodeError, httpx.DecodingError, ValueError):
                 return {}
         elif response.status_code == 401:
-            print("🛑 The credentials you provided are invalid; please check them and try again.")
+            print(f"Échec ({response.status_code}) : {response.text}")
             sys.exit(1)
         else:
             print(f"Échec ({response.status_code}) : {response.text}")
             return None
 
 
-def keep_alive():
-    while True:
-        time.sleep(240)
+def keep_alive_sso():
+    for _ in range(2):
+        time.sleep(180)
         if (
             call_ca_client_rest_api(
                 "https://client.ca-connect.credit-agricole.fr/keepalive"
             )
-            is not None
+            is None
         ):
-            print("Session prolongée avec succès !")
-        else:
-            print("Échec du keepalive — La session a probablement expiré.")
             break
+
+
+def keep_alive_bff():
+    time.sleep(30)
+    if (
+        call_ca_client_rest_api(
+            "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+            {"correlationId": str(uuid.uuid4())},
+        )
+        is None
+    ):
+        return
+    time.sleep(240)
+    if (
+        call_ca_client_rest_api(
+            "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+            {"correlationId": str(uuid.uuid4())},
+        )
+        is None
+    ):
+        return
+    time.sleep(10)
+    if (
+        call_ca_client_rest_api(
+            "https://espace-client.credit-agricole.fr/bff/api/security/refresh",
+            {"correlationId": str(uuid.uuid4())},
+        )
+        is None
+    ):
+        return
+    time.sleep(229)

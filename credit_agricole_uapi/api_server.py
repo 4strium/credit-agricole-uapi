@@ -3,21 +3,22 @@ from fastapi import FastAPI, HTTPException
 
 from credit_agricole_uapi.fetch import call_ca_client_rest_api
 
+_reboot_lock = False
 
 app = FastAPI(
-    title="Trade Republic Unofficial API",
+    title="Crédit Agricole Unofficial API",
     description=(
-        "Lightweight and fast unofficial REST/WebSocket-backed API for Trade "
-        "Republic. It authenticates through the official Trade Republic app "
+        "Lightweight and fast unofficial REST/WebSocket-backed API for Crédit Agricole. "
+        "It authenticates through the official Crédit Agricole app "
         "session and exposes convenient REST "
-        "endpoints on top of Trade Republic's private REST and WebSocket APIs.\n\n"
-        "All endpoints require that the underlying Trade Republic session is "
+        "endpoints on top of Crédit Agricole's private REST and WebSocket APIs.\n\n"
+        "All endpoints require that the underlying Crédit Agricole session is "
         "already authenticated (cookies/session established by this server at "
         "startup). No API key is needed to call this local server, but the "
-        "server itself must be logged in to Trade Republic to answer requests."
+        "server itself must be logged in to Crédit Agricole to answer requests."
     ),
     version="1.0.0",
-    contact={"name": "trade-republic-uapi"},
+    contact={"name": "credit-agricole-uapi"},
 )
 
 
@@ -42,12 +43,14 @@ def fix_struct(data):
     else:
         return data
 
+
 def clean_response(data):
     for element in data:
         element.pop("libelle_role_intervenant_contrat", None)
         element.pop("id_parcours", None)
         element.pop("motif_non_valorisation", None)
         element.pop("solde_valeur", None)
+
 
 @app.get(
     "/api/accounts",
@@ -57,6 +60,8 @@ def clean_response(data):
     response_description="List of accounts.",
 )
 def get_accounts_data():
+    global _reboot_lock
+    _reboot_lock = True
     accounts = call_ca_client_rest_api(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES"
     )
@@ -68,6 +73,7 @@ def get_accounts_data():
 
     clean_response(accounts["COMPTES"])
 
+    _reboot_lock = False
     return accounts["COMPTES"]
 
 
@@ -79,6 +85,8 @@ def get_accounts_data():
     response_description="List of insurance.",
 )
 def get_insurance_data():
+    global _reboot_lock
+    _reboot_lock = True
     insurance = call_ca_client_rest_api(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES"
     )
@@ -90,6 +98,7 @@ def get_insurance_data():
 
     clean_response(insurance["ASSURANCES"])
 
+    _reboot_lock = False
     return insurance["ASSURANCES"]
 
 
@@ -101,6 +110,8 @@ def get_insurance_data():
     response_description="List of savings.",
 )
 def get_savings_data():
+    global _reboot_lock
+    _reboot_lock = True
     savings = call_ca_client_rest_api(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE"
     )
@@ -112,6 +123,7 @@ def get_savings_data():
 
     clean_response(savings["EPARGNE"])
 
+    _reboot_lock = False
     return savings["EPARGNE"]
 
 
@@ -123,6 +135,8 @@ def get_savings_data():
     response_description="List of loans.",
 )
 def get_loans_data():
+    global _reboot_lock
+    _reboot_lock = True
     loans = call_ca_client_rest_api(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS"
     )
@@ -134,6 +148,7 @@ def get_loans_data():
 
     clean_response(loans["CREDITS"])
 
+    _reboot_lock = False
     return loans["CREDITS"]
 
 
@@ -145,6 +160,8 @@ def get_loans_data():
     response_description="List of investments.",
 )
 def get_investments_data():
+    global _reboot_lock
+    _reboot_lock = True
     investments = call_ca_client_rest_api(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS"
     )
@@ -158,6 +175,7 @@ def get_investments_data():
 
     clean_response(investments["PLACEMENTS"])
 
+    _reboot_lock = False
     return investments["PLACEMENTS"]
 
 

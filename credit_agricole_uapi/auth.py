@@ -1,4 +1,6 @@
 import socket
+import time
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
 def get_local_ip():
@@ -9,3 +11,65 @@ def get_local_ip():
         except OSError:
             local_ip = "127.0.0.1"
     return local_ip
+
+
+def ca_login(page, console, account_id, password, initial_url):
+    # Attendre l'input pour l'identifiant
+    input_selector = 'input[name="identifiant"]'
+    page.wait_for_selector(input_selector, timeout=20000)
+
+    # Remplir l'identifiant
+    page.fill(input_selector, str(account_id))
+    page.press(input_selector, "Enter")
+
+    # Attendre que le clavier virtuel apparaisse
+    keypad_selector = "app-keypad"
+    page.wait_for_selector(keypad_selector, timeout=20000)
+
+    # Convertir le mot de passe en string pour accéder à chaque digit
+    password_str = str(password).zfill(6)  # S'assurer que c'est 6 digits
+
+    # Cliquer sur chaque bouton du clavier correspondant aux digits du password
+    for digit in password_str:
+        # Localiser tous les boutons du clavier (sauf le bouton d'effacement qui a un id)
+        buttons = page.locator("app-keypad button[data-row]:not(#keypad-erase)")
+        clicked = False
+
+        # Parcourir tous les boutons pour trouver celui avec le digit
+        for i in range(buttons.count()):
+            button = buttons.nth(i)
+            text_content = (button.text_content() or "").strip()
+
+            if text_content == digit:
+                button.click()
+                clicked = True
+                time.sleep(0.25)
+                break
+
+        if not clicked:
+            raise ValueError(f"Could not find button for digit {digit}")
+
+    # Attendre que le bouton submit soit disponible et cliquer dessus
+    submit_button = None
+    try:
+        submit_button = page.wait_for_selector(
+            'mds-button[type="submit"]', timeout=5000
+        )
+    except PlaywrightTimeoutError:
+        submit_button = page.wait_for_selector('button[type="submit"]', timeout=5000)
+
+    if submit_button is None:
+        raise ValueError("Submit button not found")
+    submit_button.click()
+    time.sleep(0.5)
+
+    # Vérifier la redirection (attendre un changement d'URL ou un délai)
+    page.wait_for_url(lambda url: url != initial_url, timeout=15000)
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except PlaywrightTimeoutError:
+        console.print(
+            "[dim]⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité.[/dim]"
+        )
+    time.sleep(3)

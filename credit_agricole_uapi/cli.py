@@ -14,9 +14,13 @@ from playwright.sync_api import sync_playwright
 from rich.console import Console
 from rich.panel import Panel
 
-from credit_agricole_uapi.api_server import get_accounts_data, start_api_server
-from credit_agricole_uapi.auth import get_local_ip
-from credit_agricole_uapi.fetch import init_client, keep_alive
+from credit_agricole_uapi.api_server import (
+    get_accounts_data,
+    start_api_server,
+    _reboot_lock,
+)
+from credit_agricole_uapi.auth import get_local_ip, ca_login
+from credit_agricole_uapi.fetch import init_client, keep_alive_sso, keep_alive_bff
 from credit_agricole_uapi.preferences import (
     ask_preferences,
     check_preferences,
@@ -36,7 +40,6 @@ console = Console()
 auth_path = Path("data/auth.json")
 server_log_path = Path("data/server.log")
 server_pid_path = Path("data/server.pid")
-
 
 
 def ensure_chromium_installed() -> None:
@@ -94,7 +97,9 @@ def stop_background_server():
         # start_new_session=True met le process dans son propre groupe :
         # on tue tout le groupe (process principal + thread API/Playwright).
         os.killpg(pid, signal.SIGTERM)
-        console.print(f"[bold {CLI_COLOR_STYLE}]🛑 Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]")
+        console.print(
+            f"[bold {CLI_COLOR_STYLE}]🛑 Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]"
+        )
     except ProcessLookupError:
         console.print(
             "[bold yellow]⚠️  Server was not running (stale PID file removed).[/bold yellow]"
@@ -103,7 +108,7 @@ def stop_background_server():
         server_pid_path.unlink(missing_ok=True)
 
 
-def run_background_server(port: int):
+def run_background_server(port: int, account_id: int, password: int):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
 
@@ -116,13 +121,7 @@ def run_background_server(port: int):
             f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier"
         )
 
-        # On attend la stabilisation complète du réseau (plus aucun appel
-        # API en cours) avant de capturer les cookies et de construire
-        # l'unique client HTTP persistant utilisé pour toute la durée de
-        # vie de ce sous-processus (serveur API + keep-alive). C'est la
-        # seule façon fiable de "retrouver" une session à jour au démarrage
-        # du sous-processus, sans risquer de figer un jeton XSRF-TOKEN déjà
-        # périmé par une rotation antérieure.
+        # On attend la stabilisation complète du réseau
         try:
             page.wait_for_load_state("networkidle", timeout=30000)
         except PlaywrightTimeoutError:
@@ -139,8 +138,33 @@ def run_background_server(port: int):
         )
         api_thread.start()
 
-        keep_alive()
+        global_keep_alive(page, context, account_id, password)
 
+
+def global_keep_alive(page, context, account_id, password):
+    while True:
+        ka_sso_thread = threading.Thread(target=keep_alive_sso, daemon=True)
+        ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
+        ka_sso_thread.start()
+        ka_bff_thread.start()
+        ka_sso_thread.join()
+        ka_bff_thread.join()
+
+        while _reboot_lock:
+            time.sleep(1)
+
+        page.evaluate("""
+        () => {
+            localStorage.clear();
+            sessionStorage.clear();
+        }
+        """)
+
+        context.clear_cookies()
+        page.reload()
+        time.sleep(2)
+        ca_login(page, console, account_id, password, page.url)
+        time.sleep(2)
 
 def main():
     ensure_chromium_installed()
@@ -174,7 +198,7 @@ def main():
             title=f"[bold black on {CLI_COLOR_STYLE}] AUTHENTIFICATION PROCESS [/bold black on {CLI_COLOR_STYLE}]",
             border_style=f"{CLI_COLOR_STYLE}",
             expand=False,
-            padding=(1, 2)
+            padding=(1, 2),
         )
     )
 
@@ -221,80 +245,13 @@ def main():
                 spinner="dots",
                 spinner_style="yellow",
             ):
-                # Attendre l'input pour l'identifiant
-                input_selector = 'input[name="identifiant"]'
-                page.wait_for_selector(input_selector, timeout=20000)
-    
-                # Remplir l'identifiant
-                page.fill(input_selector, str(account_id))
-                page.press(input_selector, "Enter")
-    
-                # Attendre que le clavier virtuel apparaisse
-                keypad_selector = "app-keypad"
-                page.wait_for_selector(keypad_selector, timeout=20000)
-    
-                # Convertir le mot de passe en string pour accéder à chaque digit
-                password_str = str(password).zfill(6)  # S'assurer que c'est 6 digits
-    
-                # Cliquer sur chaque bouton du clavier correspondant aux digits du password
-                for digit in password_str:
-                    # Localiser tous les boutons du clavier (sauf le bouton d'effacement qui a un id)
-                    buttons = page.locator("app-keypad button[data-row]:not(#keypad-erase)")
-                    clicked = False
-    
-                    # Parcourir tous les boutons pour trouver celui avec le digit
-                    for i in range(buttons.count()):
-                        button = buttons.nth(i)
-                        text_content = (button.text_content() or "").strip()
-    
-                        if text_content == digit:
-                            button.click()
-                            clicked = True
-                            time.sleep(0.25)
-                            break
-    
-                    if not clicked:
-                        raise ValueError(f"Could not find button for digit {digit}")
-    
-                # Attendre que le bouton submit soit disponible et cliquer dessus
-                # Le bouton submit peut être soit un mds-button, soit un button normal
-                submit_button = None
-                try:
-                    submit_button = page.wait_for_selector(
-                        'mds-button[type="submit"]', timeout=5000
-                    )
-                except PlaywrightTimeoutError:
-                    submit_button = page.wait_for_selector(
-                        'button[type="submit"]', timeout=5000
-                    )
-    
-                if submit_button is None:
-                    raise ValueError("Submit button not found")
-                submit_button.click()
-                time.sleep(0.5)  # Laisser le formulaire traiter la soumission
-    
-                # Vérifier la redirection (attendre un changement d'URL ou un délai)
-                page.wait_for_url(lambda url: url != initial_url, timeout=15000)
-    
-                # Authentification réussie : on attend maintenant la
-                # stabilisation complète du réseau (plus aucun appel API en
-                # cours) avant de capturer les cookies. Le serveur du Crédit
-                # Agricole fait pivoter le jeton anti-CSRF (XSRF-TOKEN) à chaque
-                # réponse : capturer les cookies trop tôt figerait un jeton déjà
-                # obsolète.
-                try:
-                    page.wait_for_load_state("networkidle", timeout=30000)
-                except PlaywrightTimeoutError:
-                    console.print(
-                        "[dim]⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité.[/dim]"
-                    )
-                time.sleep(3)
-    
+                ca_login(page, console, account_id, password, initial_url)
+
                 # On sauvegarde l'état de la session (cookies + storage) sur
                 # disque afin que le sous-processus de fond puisse démarrer sa
                 # propre session Playwright à partir d'un état déjà authentifié.
                 context.storage_state(path=auth_path)
-    
+
                 # Construction de l'unique client HTTP persistant de
                 # l'application, à partir des cookies fraîchement stabilisés.
                 init_client(context.cookies())
@@ -305,7 +262,7 @@ def main():
             console.print(
                 f"[bold {CLI_COLOR_STYLE}]\n🎉 Authentification successful 🎉[/bold {CLI_COLOR_STYLE}]"
             )
-            
+
             port = load_preferences().get("api_port")
 
             local_ip = get_local_ip()
@@ -332,11 +289,16 @@ def main():
                 process = subprocess.Popen(
                     [
                         sys.executable,
+                        "-u",
                         "-m",
                         "credit_agricole_uapi.cli",
                         "--background",
                         "--port",
                         str(port),
+                        "--account-id",
+                        str(account_id),
+                        "--password",
+                        str(password),
                     ],
                     stdout=logfile,
                     stderr=logfile,
@@ -345,7 +307,6 @@ def main():
                 )
                 server_pid_path.write_text(str(process.pid))
 
-            
             sys.exit(0)
 
         except PlaywrightTimeoutError:
@@ -385,6 +346,8 @@ def run():
     parser.add_argument(
         "--port", type=int, default=8000, help="Listening port for the API"
     )
+    parser.add_argument("--account-id", type=int, help="Account ID for authentication")
+    parser.add_argument("--password", type=int, help="Password for authentication")
     parser.add_argument(
         "--stop",
         action="store_true",
@@ -394,7 +357,7 @@ def run():
     if args.stop:
         stop_background_server()
     elif "--background" in sys.argv:
-        run_background_server(args.port)
+        run_background_server(args.port, args.account_id, args.password)
     else:
         main()
 

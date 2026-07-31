@@ -8,6 +8,7 @@ from prompt_toolkit.styles import Style
 
 CLI_COLOR_STYLE = "#046e4c"
 
+
 def save_preferences(user_agreement: bool, regional_branch: str, api_port: int):
     path = Path("data/preferences.json")
     with path.open("w") as f:
@@ -126,7 +127,7 @@ def ask_preferences(console):
 
     regional_branch = questionary.select(
         "Select your regional branch 🏡",
-        choices=caisses_regionales.keys(),
+        choices=list(caisses_regionales.keys()),
         style=questionary.Style(
             [
                 ("selected", f"fg:{CLI_COLOR_STYLE} bold"),
