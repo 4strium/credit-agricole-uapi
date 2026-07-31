@@ -73,3 +73,13 @@ def ca_login(page, console, account_id, password, initial_url):
             "[dim]⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité.[/dim]"
         )
     time.sleep(3)
+
+
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return True
+    return False

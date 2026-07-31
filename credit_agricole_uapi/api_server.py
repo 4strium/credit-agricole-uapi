@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 
 from credit_agricole_uapi.fetch import call_ca_client_rest_api
 
-_reboot_lock = False
+from credit_agricole_uapi.globals import _reboot_lock
 
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
@@ -52,6 +52,24 @@ def clean_response(data):
         element.pop("solde_valeur", None)
 
 
+def regular_get(endpoint: str, specific_key: str | None = None):
+    _reboot_lock.disable_reboot()
+
+    data = call_ca_client_rest_api(endpoint)
+    if data is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch accounts details")
+
+    if data == {}:
+        return []
+
+    if specific_key is not None:
+        data = data[specific_key]
+    clean_response(data)
+
+    _reboot_lock.enable_reboot()
+    return data
+
+
 @app.get(
     "/api/accounts",
     tags=["Account"],
@@ -60,21 +78,10 @@ def clean_response(data):
     response_description="List of accounts.",
 )
 def get_accounts_data():
-    global _reboot_lock
-    _reboot_lock = True
-    accounts = call_ca_client_rest_api(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES"
+    return regular_get(
+        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES",
+        "COMPTES",
     )
-    if accounts is None:
-        raise HTTPException(status_code=500, detail="Failed to fetch accounts details")
-
-    if accounts == {}:
-        return []
-
-    clean_response(accounts["COMPTES"])
-
-    _reboot_lock = False
-    return accounts["COMPTES"]
 
 
 @app.get(
@@ -85,21 +92,10 @@ def get_accounts_data():
     response_description="List of insurance.",
 )
 def get_insurance_data():
-    global _reboot_lock
-    _reboot_lock = True
-    insurance = call_ca_client_rest_api(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES"
+    return regular_get(
+        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES",
+        "ASSURANCES",
     )
-    if insurance is None:
-        raise HTTPException(status_code=500, detail="Failed to fetch insurance details")
-
-    if insurance == {}:
-        return []
-
-    clean_response(insurance["ASSURANCES"])
-
-    _reboot_lock = False
-    return insurance["ASSURANCES"]
 
 
 @app.get(
@@ -110,21 +106,10 @@ def get_insurance_data():
     response_description="List of savings.",
 )
 def get_savings_data():
-    global _reboot_lock
-    _reboot_lock = True
-    savings = call_ca_client_rest_api(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE"
+    return regular_get(
+        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE",
+        "EPARGNE",
     )
-    if savings is None:
-        raise HTTPException(status_code=500, detail="Failed to fetch savings details")
-
-    if savings == {}:
-        return []
-
-    clean_response(savings["EPARGNE"])
-
-    _reboot_lock = False
-    return savings["EPARGNE"]
 
 
 @app.get(
@@ -135,21 +120,10 @@ def get_savings_data():
     response_description="List of loans.",
 )
 def get_loans_data():
-    global _reboot_lock
-    _reboot_lock = True
-    loans = call_ca_client_rest_api(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS"
+    return regular_get(
+        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS",
+        "CREDITS",
     )
-    if loans is None:
-        raise HTTPException(status_code=500, detail="Failed to fetch loans details")
-
-    if loans == {}:
-        return []
-
-    clean_response(loans["CREDITS"])
-
-    _reboot_lock = False
-    return loans["CREDITS"]
 
 
 @app.get(
@@ -160,23 +134,10 @@ def get_loans_data():
     response_description="List of investments.",
 )
 def get_investments_data():
-    global _reboot_lock
-    _reboot_lock = True
-    investments = call_ca_client_rest_api(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS"
+    return regular_get(
+        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS",
+        "PLACEMENTS",
     )
-    if investments is None:
-        raise HTTPException(
-            status_code=500, detail="Failed to fetch investments details"
-        )
-
-    if investments == {}:
-        return []
-
-    clean_response(investments["PLACEMENTS"])
-
-    _reboot_lock = False
-    return investments["PLACEMENTS"]
 
 
 def start_api_server(port):

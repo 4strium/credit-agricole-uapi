@@ -14,12 +14,8 @@ from playwright.sync_api import sync_playwright
 from rich.console import Console
 from rich.panel import Panel
 
-from credit_agricole_uapi.api_server import (
-    get_accounts_data,
-    start_api_server,
-    _reboot_lock,
-)
-from credit_agricole_uapi.auth import get_local_ip, ca_login
+from credit_agricole_uapi.api_server import get_accounts_data, start_api_server
+from credit_agricole_uapi.auth import get_local_ip, ca_login, is_port_in_use
 from credit_agricole_uapi.fetch import init_client, keep_alive_sso, keep_alive_bff
 from credit_agricole_uapi.preferences import (
     ask_preferences,
@@ -27,6 +23,8 @@ from credit_agricole_uapi.preferences import (
     load_preferences,
     CLI_COLOR_STYLE,
 )
+
+from credit_agricole_uapi.globals import _reboot_lock
 
 APP_LOGO = """
  ██████ ██████  ███████ ██████  ██ ████████      █████   ██████  ██████  ██  ██████  ██████  ██      ███████     ██    ██  █████  ██████  ██ 
@@ -84,11 +82,12 @@ def get_launch_command() -> str:
     return "credit-agricole-uapi"
 
 
-def stop_background_server():
+def stop_background_server(silent: bool = False):
     if not server_pid_path.exists():
-        console.print(
-            "[bold yellow]⚠️ No running background server found (no PID file).[/bold yellow]"
-        )
+        if not silent:
+            console.print(
+                "[bold yellow]⚠️  No running background server found (no PID file).[/bold yellow]"
+            )
         return
 
     pid = int(server_pid_path.read_text().strip())
@@ -97,13 +96,15 @@ def stop_background_server():
         # start_new_session=True met le process dans son propre groupe :
         # on tue tout le groupe (process principal + thread API/Playwright).
         os.killpg(pid, signal.SIGTERM)
-        console.print(
-            f"[bold {CLI_COLOR_STYLE}]🛑 Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]"
-        )
+        if not silent:
+            console.print(
+                f"[bold {CLI_COLOR_STYLE}]🛑  Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]"
+            )
     except ProcessLookupError:
-        console.print(
-            "[bold yellow]⚠️  Server was not running (stale PID file removed).[/bold yellow]"
-        )
+        if not silent:
+            console.print(
+                "[bold yellow]⚠️  Server was not running (stale PID file removed).[/bold yellow]"
+            )
     finally:
         server_pid_path.unlink(missing_ok=True)
 
@@ -143,6 +144,8 @@ def run_background_server(port: int, account_id: int, password: int):
 
 def global_keep_alive(page, context, account_id, password):
     while True:
+        _reboot_lock.enable_reboot()
+      
         ka_sso_thread = threading.Thread(target=keep_alive_sso, daemon=True)
         ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
         ka_sso_thread.start()
@@ -150,8 +153,10 @@ def global_keep_alive(page, context, account_id, password):
         ka_sso_thread.join()
         ka_bff_thread.join()
 
-        while _reboot_lock:
-            time.sleep(1)
+        while not _reboot_lock.reboot_is_available():
+            time.sleep(0.1)
+
+        _reboot_lock.set_rebooting()
 
         page.evaluate("""
         () => {
@@ -165,6 +170,7 @@ def global_keep_alive(page, context, account_id, password):
         time.sleep(2)
         ca_login(page, console, account_id, password, page.url)
         time.sleep(2)
+
 
 def main():
     ensure_chromium_installed()
@@ -219,6 +225,8 @@ def main():
     password = int(password)
     console.print("")
 
+    stop_background_server(silent=True)
+
     with sync_playwright() as p:
         with console.status(
             "[bold yellow]Connecting to Crédit Agricole server...[/bold yellow]",
@@ -264,6 +272,14 @@ def main():
             )
 
             port = load_preferences().get("api_port")
+            if not port:
+                return
+
+            if is_port_in_use(port):
+                console.print(
+                    f"[bold red]⚠️  Port {port} is already in use. The background server will not be started.[/bold red]"
+                )
+                sys.exit(1)
 
             local_ip = get_local_ip()
             console.print(
@@ -307,7 +323,7 @@ def main():
                 )
                 server_pid_path.write_text(str(process.pid))
 
-            sys.exit(0)
+            return
 
         except PlaywrightTimeoutError:
             console.print(
