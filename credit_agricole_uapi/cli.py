@@ -117,7 +117,7 @@ def load_cookies_in_context(context, page):
 
     for i in range(len(urls)):
         page.goto(urls[i])
-        
+
         # On attend la stabilisation complète du réseau
         try:
             page.wait_for_load_state("networkidle", timeout=30000)
@@ -151,7 +151,7 @@ def run_background_server(port: int, account_id: int, password: int):
 def global_keep_alive(page, context, account_id, password):
     while True:
         _reboot_lock.enable_reboot()
-      
+
         ka_sso_thread = threading.Thread(target=keep_alive_sso, daemon=True)
         ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
         ka_sso_thread.start()
@@ -187,6 +187,9 @@ def main():
 
     data_folder = Path("data")
     data_folder.mkdir(parents=True, exist_ok=True)
+
+    exports_folder = Path("data/exports")
+    exports_folder.mkdir(parents=True, exist_ok=True)
 
     time.sleep(2)
 

@@ -4,7 +4,13 @@ from typing import Callable
 
 from credit_agricole_uapi.fetch import call_ca_client_rest_api
 
+from credit_agricole_uapi.preferences import load_preferences
+
 from credit_agricole_uapi.globals import _reboot_lock
+
+from pydantic import BaseModel, Field
+
+import urllib.parse
 
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
@@ -21,6 +27,16 @@ app = FastAPI(
     version="1.0.0",
     contact={"name": "credit-agricole-uapi"},
 )
+
+
+class DocumentRequest(BaseModel):
+    """Request model for downloading a document by its ID."""
+
+    id: str = Field(
+        ...,
+        description="The ID of the document to retrieve",
+        examples=["CCHQ 12345678905 M.       DUPONT ROMAIN"],
+    )
 
 
 def fix_string(text: str) -> str:
@@ -51,7 +67,7 @@ def bank_product_cleaner(data):
         element.pop("id_parcours", None)
         element.pop("motif_non_valorisation", None)
         element.pop("solde_valeur", None)
-        
+
 
 def document_attributes_cleaner(data):
     for element in data:
@@ -64,12 +80,16 @@ def document_attributes_cleaner(data):
         element.pop("titulaire", None)
 
         if element.get("contrat") is not None:
-            if element.get("contrat").get("id") == "" and element.get("contrat").get("libelle") == "":
+            if (
+                element.get("contrat").get("id") == ""
+                and element.get("contrat").get("libelle") == ""
+            ):
                 element.pop("contrat", None)
 
-        
 
-def regular_get(endpoint: str, specific_key: str | None = None, cleaner: Callable | None = None):
+def regular_get(
+    endpoint: str, specific_key: str | None = None, cleaner: Callable | None = None
+):
     _reboot_lock.disable_reboot()
 
     data = call_ca_client_rest_api(endpoint)
@@ -163,6 +183,7 @@ def get_investments_data():
         bank_product_cleaner,
     )
 
+
 @app.get(
     "/api/documents-list",
     tags=["Documents"],
@@ -172,10 +193,37 @@ def get_investments_data():
 )
 def get_documents_list():
     return regular_get(
-        "https://hubdocumentaire.credit-agricole.fr/ca-finistere/bff/api/hub/documents?texte=",
+        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
         "listeDocument",
         document_attributes_cleaner,
     )
+
+
+@app.post(
+    "/api/download-document",
+    tags=["Documents"],
+    summary="Download document",
+    description=("Download a document by its ID."),
+    response_description="",
+)
+def download_document(params: DocumentRequest):
+    documents_list = regular_get(
+        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+        "listeDocument",
+    )
+
+    for document in documents_list:
+        if document["id"] == params.id:
+            pdf_bytes = regular_get(
+                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{urllib.parse.quote(document['libelle'])}?document_id={urllib.parse.quote(params.id)}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
+                "data",
+            )
+
+            if document["formatDocument"] == "application/pdf" and isinstance(
+                pdf_bytes, bytes
+            ):
+                with open(f"data/exports/{params.id}.pdf", "wb") as fichier:
+                    fichier.write(pdf_bytes)
 
 
 def start_api_server(port):

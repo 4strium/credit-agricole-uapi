@@ -73,7 +73,7 @@ def _cookie_matches_host(cookie: Mapping[str, Any], host: str) -> bool:
     Vérifie si un cookie s'applique à un host donné.
     """
     cookie_domain = cookie.get("domain", "").rstrip("/")
-    
+
     if not cookie_domain:
         return True
     if cookie_domain == host:
@@ -99,7 +99,7 @@ def _current_xsrf_token(client: httpx.Client) -> str:
     return ""
 
 
-def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
+def call_ca_client_rest_api(url: str, extra_headers: dict | None = None) -> dict | None:
     """
     Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine.
     """
@@ -125,7 +125,10 @@ def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
             try:
                 return response.json()
             except (json.JSONDecodeError, httpx.DecodingError, ValueError):
-                return {}
+                try:
+                    return {"data": response.content}
+                except Exception:
+                    return {}
         elif response.status_code == 401:
             print(f"Échec ({response.status_code}) : {response.text}")
             sys.exit(1)
