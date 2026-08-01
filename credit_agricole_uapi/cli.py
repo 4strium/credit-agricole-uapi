@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from credit_agricole_uapi.api_server import get_accounts_data, start_api_server
-from credit_agricole_uapi.auth import get_local_ip, ca_login, is_port_in_use
+from credit_agricole_uapi.auth import get_local_ip, ca_login, is_port_in_use, simulate_human
 from credit_agricole_uapi.fetch import init_client, keep_alive_sso, keep_alive_bff
 from credit_agricole_uapi.preferences import (
     ask_preferences,
@@ -143,6 +143,12 @@ def run_background_server(port: int, account_id: int, password: int):
 
 
 def global_keep_alive(page, context, account_id, password):
+    """
+    Maintiens la session active avec le site du Crédit Agricole.
+    Le rafraîchissement de l'API interne pendant 57 minutes est réalisé via des requêtes HTTP.
+    Puis une reconnexion complète est effectuée (non bloquante).
+    Le serveur API n'est démarré qu'une fois la première session stabilisée.
+    """
     while True:
         _reboot_lock.enable_reboot()
       
@@ -150,6 +156,7 @@ def global_keep_alive(page, context, account_id, password):
         ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
         ka_sso_thread.start()
         ka_bff_thread.start()
+        simulate_human(page)
         ka_sso_thread.join()
         ka_bff_thread.join()
 

@@ -1,6 +1,7 @@
 import socket
 import time
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+import random
 
 
 def get_local_ip():
@@ -83,3 +84,26 @@ def is_port_in_use(port: int) -> bool:
         except OSError:
             return True
     return False
+
+def simulate_human(page):
+    start_time = time.time()
+    while True:
+        print(page.url, flush=True)
+      
+        if time.time() - start_time > 3300 :
+            break
+
+        try:
+            viewport = page.viewport_size
+            width = viewport['width'] if viewport else 1280
+            height = viewport['height'] if viewport else 720
+
+            target_x = random.randint(100, width - 100)
+            target_y = random.randint(100, height - 100)
+
+            # Mouvement de souris en version synchrone
+            page.mouse.move(target_x, target_y, steps=random.randint(10, 20))
+
+            time.sleep(random.uniform(20, 40))
+        except PlaywrightTimeoutError:
+            break

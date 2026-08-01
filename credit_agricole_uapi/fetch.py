@@ -133,7 +133,7 @@ def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
 
 
 def keep_alive_sso():
-    for _ in range(2):
+    for _ in range(19):
         time.sleep(180)
         if (
             call_ca_client_rest_api(
@@ -146,30 +146,31 @@ def keep_alive_sso():
 
 def keep_alive_bff():
     time.sleep(30)
-    if (
-        call_ca_client_rest_api(
-            "https://espace-client.credit-agricole.fr/bff/api/security/ping",
-            {"correlationId": str(uuid.uuid4())},
-        )
-        is None
-    ):
-        return
-    time.sleep(240)
-    if (
-        call_ca_client_rest_api(
-            "https://espace-client.credit-agricole.fr/bff/api/security/ping",
-            {"correlationId": str(uuid.uuid4())},
-        )
-        is None
-    ):
-        return
-    time.sleep(10)
-    if (
-        call_ca_client_rest_api(
-            "https://espace-client.credit-agricole.fr/bff/api/security/refresh",
-            {"correlationId": str(uuid.uuid4())},
-        )
-        is None
-    ):
-        return
-    time.sleep(229)
+    for _ in range(7):
+        if (
+            call_ca_client_rest_api(
+                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+                {"correlationId": str(uuid.uuid4())},
+            )
+            is None
+        ):
+            break
+        time.sleep(240)
+        if (
+            call_ca_client_rest_api(
+                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+                {"correlationId": str(uuid.uuid4())},
+            )
+            is None
+        ):
+            return
+        time.sleep(10)
+        if (
+            call_ca_client_rest_api(
+                "https://espace-client.credit-agricole.fr/bff/api/security/refresh",
+                {"correlationId": str(uuid.uuid4())},
+            )
+            is None
+        ):
+            return
+        time.sleep(229)
