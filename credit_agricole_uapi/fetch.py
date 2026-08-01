@@ -57,6 +57,7 @@ def _get_or_create_client_for(url: str) -> httpx.Client:
     Doit être appelée sous _client_lock pour éviter les races.
     """
     host = urlparse(url).netloc
+
     if host not in _clients:
         domain_cookies = [c for c in _raw_cookies if _cookie_matches_host(c, host)]
         _clients[host] = httpx.Client(
@@ -72,6 +73,7 @@ def _cookie_matches_host(cookie: Mapping[str, Any], host: str) -> bool:
     Vérifie si un cookie s'applique à un host donné.
     """
     cookie_domain = cookie.get("domain", "").rstrip("/")
+    
     if not cookie_domain:
         return True
     if cookie_domain == host:

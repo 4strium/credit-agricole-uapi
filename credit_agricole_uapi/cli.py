@@ -109,6 +109,25 @@ def stop_background_server(silent: bool = False):
         server_pid_path.unlink(missing_ok=True)
 
 
+def load_cookies_in_context(context, page):
+    urls = [
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier",
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/documents/mes-documents",
+    ]
+
+    for i in range(len(urls)):
+        page.goto(urls[i])
+        
+        # On attend la stabilisation complète du réseau
+        try:
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except PlaywrightTimeoutError:
+            time.sleep(5)
+
+    init_client(context.cookies())
+    context.storage_state(path=auth_path)
+
+
 def run_background_server(port: int, account_id: int, password: int):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -118,21 +137,8 @@ def run_background_server(port: int, account_id: int, password: int):
             storage_state=auth_path,
         )
         page = context.new_page()
-        page.goto(
-            f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier"
-        )
 
-        # On attend la stabilisation complète du réseau
-        try:
-            page.wait_for_load_state("networkidle", timeout=30000)
-        except PlaywrightTimeoutError:
-            print(
-                "⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité."
-            )
-        time.sleep(5)
-
-        init_client(context.cookies())
-        context.storage_state(path=auth_path)
+        load_cookies_in_context(context, page)
 
         api_thread = threading.Thread(
             target=start_api_server, args=(port,), daemon=True
@@ -157,6 +163,7 @@ def global_keep_alive(page, context, account_id, password):
             time.sleep(0.1)
 
         _reboot_lock.set_rebooting()
+        print("Rebooting...", flush=True)
 
         page.evaluate("""
         () => {
@@ -167,9 +174,8 @@ def global_keep_alive(page, context, account_id, password):
 
         context.clear_cookies()
         page.reload()
-        time.sleep(2)
         ca_login(page, console, account_id, password, page.url)
-        time.sleep(2)
+        load_cookies_in_context(context, page)
 
 
 def main():

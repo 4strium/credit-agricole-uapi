@@ -1,5 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from typing import Callable
 
 from credit_agricole_uapi.fetch import call_ca_client_rest_api
 
@@ -44,15 +45,31 @@ def fix_struct(data):
         return data
 
 
-def clean_response(data):
+def bank_product_cleaner(data):
     for element in data:
         element.pop("libelle_role_intervenant_contrat", None)
         element.pop("id_parcours", None)
         element.pop("motif_non_valorisation", None)
         element.pop("solde_valeur", None)
+        
 
+def document_attributes_cleaner(data):
+    for element in data:
+        element.pop("organisme", None)
+        element.pop("origine", None)
+        element.pop("documentSize", None)
+        element.pop("key", None)
+        element.pop("idCategorie", None)
+        element.pop("idTypeDocument", None)
+        element.pop("titulaire", None)
 
-def regular_get(endpoint: str, specific_key: str | None = None):
+        if element.get("contrat") is not None:
+            if element.get("contrat").get("id") == "" and element.get("contrat").get("libelle") == "":
+                element.pop("contrat", None)
+
+        
+
+def regular_get(endpoint: str, specific_key: str | None = None, cleaner: Callable | None = None):
     _reboot_lock.disable_reboot()
 
     data = call_ca_client_rest_api(endpoint)
@@ -64,7 +81,9 @@ def regular_get(endpoint: str, specific_key: str | None = None):
 
     if specific_key is not None:
         data = data[specific_key]
-    clean_response(data)
+
+    if cleaner is not None:
+        cleaner(data)
 
     _reboot_lock.enable_reboot()
     return data
@@ -81,6 +100,7 @@ def get_accounts_data():
     return regular_get(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES",
         "COMPTES",
+        bank_product_cleaner,
     )
 
 
@@ -95,6 +115,7 @@ def get_insurance_data():
     return regular_get(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES",
         "ASSURANCES",
+        bank_product_cleaner,
     )
 
 
@@ -109,6 +130,7 @@ def get_savings_data():
     return regular_get(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE",
         "EPARGNE",
+        bank_product_cleaner,
     )
 
 
@@ -123,6 +145,7 @@ def get_loans_data():
     return regular_get(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS",
         "CREDITS",
+        bank_product_cleaner,
     )
 
 
@@ -137,6 +160,21 @@ def get_investments_data():
     return regular_get(
         "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS",
         "PLACEMENTS",
+        bank_product_cleaner,
+    )
+
+@app.get(
+    "/api/documents-list",
+    tags=["Documents"],
+    summary="Get documents list",
+    description=("Returns the list of the customer's documents."),
+    response_description="List of documents.",
+)
+def get_documents_list():
+    return regular_get(
+        "https://hubdocumentaire.credit-agricole.fr/ca-finistere/bff/api/hub/documents?texte=",
+        "listeDocument",
+        document_attributes_cleaner,
     )
 
 

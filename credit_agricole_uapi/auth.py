@@ -69,10 +69,8 @@ def ca_login(page, console, account_id, password, initial_url):
     try:
         page.wait_for_load_state("networkidle", timeout=30000)
     except PlaywrightTimeoutError:
-        console.print(
-            "[dim]⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité.[/dim]"
-        )
-    time.sleep(3)
+        pass
+    time.sleep(2)
 
 
 def is_port_in_use(port: int) -> bool:
