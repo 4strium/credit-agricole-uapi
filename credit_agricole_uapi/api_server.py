@@ -1,6 +1,7 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from typing import Callable
+from fastapi.staticfiles import StaticFiles
+from typing import Callable, Literal
 
 from credit_agricole_uapi.fetch import call_ca_client_rest_api
 
@@ -8,9 +9,15 @@ from credit_agricole_uapi.preferences import load_preferences
 
 from credit_agricole_uapi.globals import _reboot_lock
 
+from credit_agricole_uapi.auth import get_local_ip
+
 from pydantic import BaseModel, Field
 
 import urllib.parse
+
+from pathlib import Path
+
+APPROVED_DOC_TYPES = Literal["Relevés", "Contrats", "Autres"]
 
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
@@ -28,6 +35,9 @@ app = FastAPI(
     contact={"name": "credit-agricole-uapi"},
 )
 
+EXPORTS_DIR = Path("data/exports")
+EXPORTS_DIR.mkdir(exist_ok=True)
+app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
 
 class DocumentRequest(BaseModel):
     """Request model for downloading a document by its ID."""
@@ -35,7 +45,16 @@ class DocumentRequest(BaseModel):
     id: str = Field(
         ...,
         description="The ID of the document to retrieve",
-        examples=["CCHQ 12345678905 M.       DUPONT ROMAIN"],
+        examples=["12345678"],
+    )
+
+class DocumentTypeRequest(BaseModel):
+    """Request model for downloading a document by its type."""
+
+    type: APPROVED_DOC_TYPES = Field(
+        ...,
+        description="The type of the document to retrieve",
+        examples=["Relevés"],
     )
 
 
@@ -108,6 +127,29 @@ def regular_get(
     _reboot_lock.enable_reboot()
     return data
 
+def document_fetcher(document) :
+    Path(f"data/exports/{document['libelleTypeDocument']}").mkdir(parents=True, exist_ok=True)
+    
+    if document["formatDocument"] == "application/pdf" :
+        file_path = Path(f"data/exports/{document['libelleTypeDocument']}/{document['id']}.pdf")
+    
+        if not file_path.is_file():
+            if document['libelleTypeDocument'] == "Relevés":
+                fixed_libelle = urllib.parse.quote(document['libelle'] + "_" + document["contrat"]["id"].replace(".", "")).replace("/", "-") + ".pdf"
+            else:
+                fixed_libelle = urllib.parse.quote(document['libelle'])
+            pdf_bytes = regular_get(
+                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{fixed_libelle}?document_id={urllib.parse.quote(document['id'])}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
+                "data",
+            )
+    
+            if isinstance(
+                pdf_bytes, bytes
+            ):
+                with open(file_path, "wb") as fichier:
+                    fichier.write(pdf_bytes)
+
+        return f"http://{get_local_ip()}:{load_preferences().get('api_port')}/exports/{document['libelleTypeDocument']}/{document['id']}.pdf"
 
 @app.get(
     "/api/accounts",
@@ -200,13 +242,13 @@ def get_documents_list():
 
 
 @app.post(
-    "/api/download-document",
+    "/api/document-by-id",
     tags=["Documents"],
-    summary="Download document",
+    summary="Download document by its ID.",
     description=("Download a document by its ID."),
     response_description="",
 )
-def download_document(params: DocumentRequest):
+def download_document_by_id(params: DocumentRequest):
     documents_list = regular_get(
         f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
         "listeDocument",
@@ -214,16 +256,29 @@ def download_document(params: DocumentRequest):
 
     for document in documents_list:
         if document["id"] == params.id:
-            pdf_bytes = regular_get(
-                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{urllib.parse.quote(document['libelle'])}?document_id={urllib.parse.quote(params.id)}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
-                "data",
-            )
+            return {"url": document_fetcher(document)}
+    return {}
 
-            if document["formatDocument"] == "application/pdf" and isinstance(
-                pdf_bytes, bytes
-            ):
-                with open(f"data/exports/{params.id}.pdf", "wb") as fichier:
-                    fichier.write(pdf_bytes)
+
+@app.post(
+    "/api/document-by-type",
+    tags=["Documents"],
+    summary="Download document by its type.",
+    description=("Download a document by its type."),
+    response_description="",
+)
+def download_document_by_type(params: DocumentTypeRequest):
+    documents_list = regular_get(
+        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+        "listeDocument",
+    )
+
+    result = []
+
+    for document in documents_list:
+        if document["libelleTypeDocument"] == params.type:
+            result.append({document["libelle"]: document_fetcher(document)})
+    return result
 
 
 def start_api_server(port):
