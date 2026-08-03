@@ -1,5 +1,5 @@
-import time
 import threading
+import time
 from enum import Enum, auto
 
 
@@ -11,8 +11,8 @@ class RebootState(Enum):
 
 class RebootLocker:
     def __init__(self):
-        self.state = RebootState.AVAILABLE
-        self._lock = threading.Lock()
+        self.state: RebootState = RebootState.AVAILABLE
+        self._lock: threading.Lock = threading.Lock()
 
     def disable_reboot(self):
         while True:
@@ -35,4 +35,4 @@ class RebootLocker:
             return self.state == RebootState.AVAILABLE
 
 
-_reboot_lock = RebootLocker()
+reboot_lock: RebootLocker = RebootLocker()

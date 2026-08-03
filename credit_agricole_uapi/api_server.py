@@ -1,21 +1,18 @@
+import time
+import urllib.parse
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal, cast
+
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from typing import Callable, Literal
-
-from credit_agricole_uapi.fetch import call_ca_client_rest_api
-
-from credit_agricole_uapi.preferences import load_preferences
-
-from credit_agricole_uapi.globals import _reboot_lock
-
-from credit_agricole_uapi.auth import get_local_ip
-
 from pydantic import BaseModel, Field
 
-import urllib.parse
-
-from pathlib import Path
+from credit_agricole_uapi.auth import get_local_ip
+from credit_agricole_uapi.fetch import call_ca_client_rest_api, post_ca_client_rest_api
+from credit_agricole_uapi.globals import reboot_lock
+from credit_agricole_uapi.preferences import load_preferences
 
 APPROVED_DOC_TYPES = Literal["Relevés", "Contrats", "Autres"]
 
@@ -35,9 +32,12 @@ app = FastAPI(
     contact={"name": "credit-agricole-uapi"},
 )
 
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR = Path("data/exports")
-EXPORTS_DIR.mkdir(exist_ok=True)
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
+
 
 class DocumentRequest(BaseModel):
     """Request model for downloading a document by its ID."""
@@ -47,6 +47,7 @@ class DocumentRequest(BaseModel):
         description="The ID of the document to retrieve",
         examples=["12345678"],
     )
+
 
 class DocumentTypeRequest(BaseModel):
     """Request model for downloading a document by its type."""
@@ -58,16 +59,28 @@ class DocumentTypeRequest(BaseModel):
     )
 
 
+class TransactionParams(BaseModel):
+    amount: float = Field(..., description="The amount to transfer")
+    motif: str = Field(..., description="The motif of the transfer")
+    additional_motif: str = Field(
+        ..., description="The additional motif of the transfer"
+    )
+    source_account_iban: str = Field(..., description="The IBAN of the source account")
+    recipient_account_iban: str = Field(
+        ..., description="The IBAN of the recipient account"
+    )
+
+
 def fix_string(text: str) -> str:
-    if text is None:
-        return text
     try:
         return text.encode("latin-1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
         return text
 
 
-def fix_struct(data):
+def fix_struct(
+    data: dict[str, Any] | list[Any] | str | None,
+) -> dict[str, Any] | list[Any] | str | None:
     if isinstance(data, dict):
         for k, v in data.items():
             data[k] = fix_struct(v)
@@ -80,7 +93,7 @@ def fix_struct(data):
         return data
 
 
-def bank_product_cleaner(data):
+def bank_product_cleaner(data: list[dict[str, Any]]) -> None:
     for element in data:
         element.pop("libelle_role_intervenant_contrat", None)
         element.pop("id_parcours", None)
@@ -88,7 +101,7 @@ def bank_product_cleaner(data):
         element.pop("solde_valeur", None)
 
 
-def document_attributes_cleaner(data):
+def document_attributes_cleaner(data: list[dict[str, Any]]) -> None:
     for element in data:
         element.pop("organisme", None)
         element.pop("origine", None)
@@ -106,10 +119,18 @@ def document_attributes_cleaner(data):
                 element.pop("contrat", None)
 
 
+def beneficiary_cleaner(data: list[dict[str, Any]]) -> None:
+    for element in data:
+        element.pop("delay", None)
+        element.pop("custom_label", None)
+
+
 def regular_get(
-    endpoint: str, specific_key: str | None = None, cleaner: Callable | None = None
-):
-    _reboot_lock.disable_reboot()
+    endpoint: str,
+    specific_key: str | None = None,
+    cleaner: Callable[[Any], Any] | None = None,
+) -> dict[str, Any] | list[Any] | str:
+    reboot_lock.disable_reboot()
 
     data = call_ca_client_rest_api(endpoint)
     if data is None:
@@ -124,32 +145,91 @@ def regular_get(
     if cleaner is not None:
         cleaner(data)
 
-    _reboot_lock.enable_reboot()
+    reboot_lock.enable_reboot()
     return data
 
-def document_fetcher(document) :
-    Path(f"data/exports/{document['libelleTypeDocument']}").mkdir(parents=True, exist_ok=True)
-    
-    if document["formatDocument"] == "application/pdf" :
-        file_path = Path(f"data/exports/{document['libelleTypeDocument']}/{document['id']}.pdf")
-    
+
+def regular_post(
+    endpoint: str,
+    json_data: dict[str, Any] | list[Any] | None = None,
+    specific_key: str | None = None,
+    cleaner: Callable[[Any], Any] | None = None,
+) -> dict[str, Any] | list[Any] | str:
+    reboot_lock.disable_reboot()
+
+    data = post_ca_client_rest_api(endpoint, json_data)
+    if data is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch accounts details")
+
+    if data == {}:
+        return []
+
+    if specific_key is not None:
+        data = data[specific_key]
+
+    if cleaner is not None:
+        cleaner(data)
+
+    reboot_lock.enable_reboot()
+    return data
+
+
+def document_fetcher(document: dict[str, Any]) -> str:
+    Path(f"data/exports/{document['libelleTypeDocument']}").mkdir(
+        parents=True, exist_ok=True
+    )
+
+    if document["formatDocument"] == "application/pdf":
+        file_path = Path(
+            f"data/exports/{document['libelleTypeDocument']}/{document['id']}.pdf"
+        )
+
         if not file_path.is_file():
-            if document['libelleTypeDocument'] == "Relevés":
-                fixed_libelle = urllib.parse.quote(document['libelle'] + "_" + document["contrat"]["id"].replace(".", "")).replace("/", "-") + ".pdf"
+            if document["libelleTypeDocument"] == "Relevés":
+                fixed_libelle = (
+                    urllib.parse.quote(
+                        document["libelle"]
+                        + "_"
+                        + document["contrat"]["id"].replace(".", "")
+                    ).replace("/", "-")
+                    + ".pdf"
+                )
             else:
-                fixed_libelle = urllib.parse.quote(document['libelle'])
+                fixed_libelle = urllib.parse.quote(document["libelle"])
             pdf_bytes = regular_get(
                 f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{fixed_libelle}?document_id={urllib.parse.quote(document['id'])}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
                 "data",
             )
-    
-            if isinstance(
-                pdf_bytes, bytes
-            ):
+
+            if isinstance(pdf_bytes, bytes):
                 with open(file_path, "wb") as fichier:
-                    fichier.write(pdf_bytes)
+                    _ = fichier.write(pdf_bytes)
 
         return f"http://{get_local_ip()}:{load_preferences().get('api_port')}/exports/{document['libelleTypeDocument']}/{document['id']}.pdf"
+
+    return ""
+
+
+def _login_transaction_subdomain() -> str:
+    encrypted_token = cast(
+        dict[str, str | int],
+        regular_post(
+            "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
+            {"id_parcours": "VIREMENT-UNITAIRE"},
+            "context_token",
+        ),
+    )["encrypted_token"]
+  
+    context_id = cast(
+        dict[str, str],
+        regular_post(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/login",
+            {"token": encrypted_token},
+        ),
+    )["contextId"]
+
+    return context_id
+
 
 @app.get(
     "/api/accounts",
@@ -241,6 +321,120 @@ def get_documents_list():
     )
 
 
+@app.get(
+    "/api/transaction-accounts",
+    tags=["Transactions"],
+    summary="Get transaction accounts",
+    description=("Returns the list of the customer's transaction accounts."),
+    response_description="",
+)
+def get_transaction_enabled_accounts() -> dict[str, Any]:
+
+    _ = _login_transaction_subdomain()
+
+    res: dict[str, Any] = {}
+
+    res["internal"] = cast(
+        list[dict[str, Any]],
+        regular_get(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+            "my_accounts",
+        ),
+    )[0]["accounts"]
+
+    res["external"] = regular_get(
+        f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+        "beneficiaries",
+        beneficiary_cleaner,
+    )
+
+    return res
+
+
+@app.post(
+    "/api/transaction",
+    tags=["Transactions"],
+    summary="Carry out transaction",
+    description=("Perform a transaction."),
+    response_description="",
+)
+def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
+
+    if params.source_account_iban == params.recipient_account_iban:
+        raise HTTPException(
+            status_code=400, detail="Source and recipient account cannot be the same"
+        )
+
+    context_id = _login_transaction_subdomain()
+
+    transfer_infos = cast(
+        dict[str, Any],
+        regular_get(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+        ),
+    )
+
+    transfer_flow_id = cast(str, transfer_infos["transfer_flow_id"])
+    internal_accounts = cast(
+        list[dict[str, Any]], transfer_infos["my_accounts"][0]["accounts"]
+    )
+    external_accounts = cast(
+        list[dict[str, Any]],
+        regular_get(
+            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+            "beneficiaries",
+        ),
+    )
+
+    source_account_data = {}
+    recipient_account_data = {}
+
+    for internal_account in internal_accounts:
+        if internal_account["iban"] == params.source_account_iban:
+            source_account_data = internal_account
+        elif internal_account["iban"] == params.recipient_account_iban:
+            recipient_account_data = {"internal": internal_account}
+
+    for external_account in external_accounts:
+        if external_account["iban"] == params.recipient_account_iban:
+            recipient_account_data = {"external": external_account}
+
+    if source_account_data == {} or recipient_account_data == {}:
+        raise HTTPException(
+            status_code=404, detail="Source or recipient account not found"
+        )
+
+    transaction_package = {
+        "virement": {
+            "transfer_flow_id": transfer_flow_id,
+            "source_account": source_account_data,
+            "recipient_account": recipient_account_data,
+            "date": time.time_ns() // 1_000_000,
+            "amount": str(round(params.amount, 2)),
+            "motif": params.motif,
+            "additional_motif": params.additional_motif,
+            "transfer_frequency_code": "U",
+            "end_due_date": 0,
+        }
+    }
+
+    confirm_transfer_flow_id = cast(
+        str,
+        regular_post(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
+            transaction_package,
+            "transfer_flow_id",
+        ),
+    )
+
+    _ = regular_post(
+        "https://virement-npc-unitaire.credit-agricole.fr/ca-centrest/bffvir/creation-virement",
+        {"transfer_flow_id": confirm_transfer_flow_id},
+    )
+
+    return {"Result": "Transaction carried out successfully"}
+
+
 @app.post(
     "/api/document-by-id",
     tags=["Documents"],
@@ -248,10 +442,13 @@ def get_documents_list():
     description=("Download a document by its ID."),
     response_description="",
 )
-def download_document_by_id(params: DocumentRequest):
-    documents_list = regular_get(
-        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-        "listeDocument",
+def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
+    documents_list = cast(
+        list[dict[str, Any]],
+        regular_get(
+            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+            "listeDocument",
+        ),
     )
 
     for document in documents_list:
@@ -267,13 +464,16 @@ def download_document_by_id(params: DocumentRequest):
     description=("Download a document by its type."),
     response_description="",
 )
-def download_document_by_type(params: DocumentTypeRequest):
-    documents_list = regular_get(
-        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-        "listeDocument",
+def download_document_by_type(params: DocumentTypeRequest) -> list[dict[str, str]]:
+    documents_list = cast(
+        list[dict[str, Any]],
+        regular_get(
+            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+            "listeDocument",
+        ),
     )
 
-    result = []
+    result: list[dict[str, Any]] = []
 
     for document in documents_list:
         if document["libelleTypeDocument"] == params.type:
@@ -281,5 +481,5 @@ def download_document_by_type(params: DocumentTypeRequest):
     return result
 
 
-def start_api_server(port):
+def start_api_server(port: int) -> None:
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

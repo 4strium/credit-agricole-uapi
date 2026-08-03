@@ -1,10 +1,12 @@
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 import questionary
 from prompt_toolkit.shortcuts import yes_no_dialog
 from prompt_toolkit.styles import Style
+from rich.console import Console
 
 CLI_COLOR_STYLE = "#046e4c"
 
@@ -24,7 +26,7 @@ def save_preferences(user_agreement: bool, regional_branch: str, api_port: int):
         )
 
 
-def load_preferences() -> dict:
+def load_preferences() -> dict[str, str | int | bool]:
     path = Path("data/preferences.json")
     if not path.exists():
         return {}
@@ -46,7 +48,7 @@ def check_preferences() -> bool:
     return False
 
 
-def ask_preferences(console):
+def ask_preferences(console: Console):
     user_agreement_style = Style.from_dict(
         {
             # Fond et texte du dialogue
@@ -125,23 +127,29 @@ def ask_preferences(console):
         "Val De France": "/ca-valdefrance/",
     }
 
-    regional_branch = questionary.select(
-        "Select your regional branch 🏡",
-        choices=list(caisses_regionales.keys()),
-        style=questionary.Style(
-            [
-                ("selected", f"fg:{CLI_COLOR_STYLE} bold"),
-                ("pointer", f"fg:{CLI_COLOR_STYLE} bold"),
-            ]
-        ),
-    ).ask()
+    regional_branch = cast(
+        str,
+        questionary.select(
+            "Select your regional branch 🏡",
+            choices=list(caisses_regionales.keys()),
+            style=questionary.Style(
+                [
+                    ("selected", f"fg:{CLI_COLOR_STYLE} bold"),
+                    ("pointer", f"fg:{CLI_COLOR_STYLE} bold"),
+                ]
+            ),
+        ).ask(),
+    )
 
-    api_port_str = questionary.text(
-        "On which port of your server do you want to make the API available? (make sure the port is available and not blocked by the firewall)",
-        validate=lambda val: val.isdigit() or "Please enter a valid integer.",
-        default="8000",
-    ).ask()
-
-    api_port = int(api_port_str)
+    api_port = cast(
+        int,
+        questionary.text(
+            "On which port of your server do you want to make the API available? (make sure the port is available and not blocked by the firewall)",
+            validate=lambda val: (
+                True if val.isdigit() else "Please enter a valid integer."
+            ),
+            default="8000",
+        ).ask(),
+    )
 
     save_preferences(user_agreement, caisses_regionales[regional_branch], api_port)

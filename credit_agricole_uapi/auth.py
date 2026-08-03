@@ -1,22 +1,25 @@
 import socket
 import time
+from typing import cast
+
+from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
-def get_local_ip():
+def get_local_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:
             s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
+            local_ip = cast(str, s.getsockname()[0])
         except OSError:
             local_ip = "127.0.0.1"
     return local_ip
 
 
-def ca_login(page, console, account_id, password, initial_url):
+def ca_login(page: Page, account_id: int, password: int, initial_url: str) -> None:
     # Attendre l'input pour l'identifiant
     input_selector = 'input[name="identifiant"]'
-    page.wait_for_selector(input_selector, timeout=20000)
+    _ = page.wait_for_selector(input_selector, timeout=20000)
 
     # Remplir l'identifiant
     page.fill(input_selector, str(account_id))
@@ -24,7 +27,7 @@ def ca_login(page, console, account_id, password, initial_url):
 
     # Attendre que le clavier virtuel apparaisse
     keypad_selector = "app-keypad"
-    page.wait_for_selector(keypad_selector, timeout=20000)
+    _ = page.wait_for_selector(keypad_selector, timeout=20000)
 
     # Convertir le mot de passe en string pour accéder à chaque digit
     password_str = str(password).zfill(6)  # S'assurer que c'est 6 digits
