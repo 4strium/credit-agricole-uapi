@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import os
 import signal
@@ -24,6 +25,8 @@ from credit_agricole_uapi.preferences import (
     ask_preferences,
     check_preferences,
     load_preferences,
+    validate_6digit_integer,
+    validate_integer,
 )
 
 APP_LOGO = """
@@ -63,7 +66,7 @@ def ensure_chromium_installed() -> None:
             console.print(
                 Panel(
                     "[bold white]Failed to install Chromium automatically.[/bold white]\n"
-                    "[dim]Please run: python -m playwright install chromium[/dim]",
+                    + "[dim]Please run: python -m playwright install chromium[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,
@@ -93,9 +96,9 @@ def stop_background_server(silent: bool = False):
     pid = int(server_pid_path.read_text().strip())
 
     try:
-        # start_new_session=True met le process dans son propre groupe :
-        # on tue tout le groupe (process principal + thread API/Playwright).
-        os.killpg(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGINT)
+        time.sleep(0.5)
+        os.kill(pid, signal.SIGTERM)
         if not silent:
             console.print(
                 f"[bold {CLI_COLOR_STYLE}]🛑  Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]"
@@ -221,7 +224,7 @@ def main():
         int,
         questionary.text(
             "Enter your banking ID (e.g., your account number) :",
-            validate=lambda val: val.isdigit() or "Please enter a valid integer.",
+            validate=validate_integer,
         ).ask(),
     )
 
@@ -229,11 +232,7 @@ def main():
         int,
         questionary.password(
             "Enter your app password (6-digit integer) :",
-            validate=lambda val: (
-                val.isdigit()
-                and len(val) == 6
-                or "Please enter a valid 6-digit integer."
-            ),
+            validate=validate_6digit_integer,
         ).ask(),
     )
     console.print("")
@@ -298,9 +297,9 @@ def main():
             console.print(
                 Panel.fit(
                     f"[bold {CLI_COLOR_STYLE}]🚀 API Gateway server is running in background![/bold {CLI_COLOR_STYLE}]\n\n"
-                    f"• [bold white]Local URL:[/bold white]    [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link]\n"
-                    f"• [bold white]Network URL:[/bold white] [link=http://{local_ip}:{port}]http://{local_ip}:{port}[/link]\n\n"
-                    f"[white][bold red][code]{get_launch_command()} --stop[/code][/bold red] to stop the server.[/white]",
+                    + f"• [bold white]Local URL:[/bold white]    [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link]\n"
+                    + f"• [bold white]Network URL:[/bold white] [link=http://{local_ip}:{port}]http://{local_ip}:{port}[/link]\n\n"
+                    + f"[white][bold red][code]{get_launch_command()} --stop[/code][/bold red] to stop the server.[/white]",
                     border_style=f"{CLI_COLOR_STYLE}",
                     padding=(1, 2),
                 )
@@ -342,7 +341,7 @@ def main():
             console.print(
                 Panel(
                     "[bold white]Time limit exceeded: the form did not appear in time.[/bold white]\n"
-                    "[dim]Please try again later.[/dim]",
+                    + "[dim]Please try again later.[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,
@@ -354,7 +353,7 @@ def main():
             console.print(
                 Panel(
                     f"[bold white]Authentication error: {e}[/bold white]\n"
-                    "[dim]Please try again later.[/dim]",
+                    + "[dim]Please try again later.[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,

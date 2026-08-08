@@ -43,7 +43,7 @@ def init_client(raw_cookies: Iterable[Mapping[str, Any]]) -> None:
     """
     Initialise les clients HTTP par domaine avec les cookies fournis.
     """
-    global _raw_cookies, _clients
+    global _raw_cookies
     with _client_lock:
         for client in _clients.values():
             client.close()
@@ -107,7 +107,7 @@ def call_ca_client_rest_api(
         if not _raw_cookies:
             raise RuntimeError(
                 "Le client HTTP n'a pas encore été initialisé. "
-                "Appelez fetch.init_client(...) une fois la session stabilisée."
+                + "Appelez fetch.init_client(...) une fois la session stabilisée."
             )
 
         client = _get_or_create_client_for(url)
@@ -127,7 +127,7 @@ def call_ca_client_rest_api(
             except (json.JSONDecodeError, httpx.DecodingError, ValueError):
                 try:
                     return {"data": response.content}
-                except Exception:
+                except AttributeError:
                     return {}
         elif response.status_code == 401:
             print(f"Échec ({response.status_code}) : {response.text}")
@@ -149,7 +149,7 @@ def post_ca_client_rest_api(
         if not _raw_cookies:
             raise RuntimeError(
                 "Le client HTTP n'a pas encore été initialisé. "
-                "Appelez fetch.init_client(...) une fois la session stabilisée."
+                + "Appelez fetch.init_client(...) une fois la session stabilisée."
             )
 
         client = _get_or_create_client_for(url)
@@ -169,7 +169,7 @@ def post_ca_client_rest_api(
             except (json.JSONDecodeError, httpx.DecodingError, ValueError):
                 try:
                     return {"data": response.content}
-                except Exception:
+                except AttributeError:
                     return {}
         elif response.status_code == 401:
             print(f"Échec ({response.status_code}) : {response.text}")
