@@ -160,7 +160,7 @@ def post_ca_client_rest_api(
 
         response = client.post(url, json=json_data, headers=headers)
 
-        if response.status_code in (200, 201, 204):
+        if response.status_code in (200, 201, 202, 204):
             if not response.content or not response.content.strip():
                 return {}
 
