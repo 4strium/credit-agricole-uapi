@@ -8,7 +8,7 @@ from prompt_toolkit.shortcuts import yes_no_dialog
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-CLI_COLOR_STYLE = "#046e4c"
+CLI_COLOR_STYLE: str = "#046e4c"
 
 
 def validate_integer(val: str) -> bool | str:
