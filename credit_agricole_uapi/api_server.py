@@ -594,8 +594,7 @@ def add_beneficiary(params: AddBeneficiaryRequest) -> dict[str, str]:
     )
 
     activation_date_utc = datetime.fromtimestamp(
-        cast(int, new_beneficiary.get("activationDate")) / 1000,
-        tz=timezone.utc
+        cast(int, new_beneficiary.get("activationDate")) / 1000, tz=timezone.utc
     ).astimezone()
     return {
         "result": f"The new beneficiary ({new_beneficiary.get('name')} / {new_beneficiary.get('custom_label')}) has been created, it will be available at {activation_date_utc.strftime('%d/%m/%Y %H:%M:%S')}"

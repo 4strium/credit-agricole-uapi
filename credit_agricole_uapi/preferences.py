@@ -10,11 +10,14 @@ from rich.console import Console
 
 CLI_COLOR_STYLE = "#046e4c"
 
+
 def validate_integer(val: str) -> bool | str:
     return val.isdigit() or "Please enter a valid integer."
 
+
 def validate_6digit_integer(val: str) -> bool | str:
     return val.isdigit() and len(val) == 6 or "Please enter a valid 6-digit integer."
+
 
 def save_preferences(user_agreement: bool, regional_branch: str, api_port: int):
     path = Path("data/preferences.json")
