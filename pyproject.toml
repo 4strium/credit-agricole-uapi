@@ -47,3 +47,6 @@ credit-agricole-uapi = "credit_agricole_uapi.cli:run"
 
 [tool.setuptools.packages.find]
 include = ["credit_agricole_uapi*"]
+
+[tool.ruff.lint]
+ignore = ["EXE001", "EXE002"]

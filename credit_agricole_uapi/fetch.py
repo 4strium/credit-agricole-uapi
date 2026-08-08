@@ -1,13 +1,13 @@
+import json
+import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
-import json
-import sys
-import uuid
 
 from credit_agricole_uapi.preferences import load_preferences
 
@@ -16,7 +16,7 @@ _raw_cookies: list[Mapping[str, Any]] = []
 _client_lock = threading.Lock()
 
 
-def _default_headers() -> dict:
+def _default_headers() -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
         "Accept": "application/json, text/plain, */*",
@@ -43,7 +43,7 @@ def init_client(raw_cookies: Iterable[Mapping[str, Any]]) -> None:
     """
     Initialise les clients HTTP par domaine avec les cookies fournis.
     """
-    global _raw_cookies, _clients
+    global _raw_cookies
     with _client_lock:
         for client in _clients.values():
             client.close()
@@ -57,6 +57,7 @@ def _get_or_create_client_for(url: str) -> httpx.Client:
     Doit être appelée sous _client_lock pour éviter les races.
     """
     host = urlparse(url).netloc
+
     if host not in _clients:
         domain_cookies = [c for c in _raw_cookies if _cookie_matches_host(c, host)]
         _clients[host] = httpx.Client(
@@ -71,16 +72,15 @@ def _cookie_matches_host(cookie: Mapping[str, Any], host: str) -> bool:
     """
     Vérifie si un cookie s'applique à un host donné.
     """
-    cookie_domain = cookie.get("domain", "").rstrip("/")
+    cookie_domain = cast(str, cookie.get("domain", "").rstrip("/"))
+
     if not cookie_domain:
         return True
     if cookie_domain == host:
         return True
     if cookie_domain.startswith(".") and host.endswith(cookie_domain):
         return True
-    if cookie_domain.lstrip(".") == host:
-        return True
-    return False
+    return cookie_domain.lstrip(".") == host
 
 
 def is_client_ready() -> bool:
@@ -97,7 +97,9 @@ def _current_xsrf_token(client: httpx.Client) -> str:
     return ""
 
 
-def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
+def call_ca_client_rest_api(
+    url: str, extra_headers: dict[str, str] | None = None
+) -> dict[str, Any] | None:
     """
     Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine.
     """
@@ -105,7 +107,7 @@ def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
         if not _raw_cookies:
             raise RuntimeError(
                 "Le client HTTP n'a pas encore été initialisé. "
-                "Appelez fetch.init_client(...) une fois la session stabilisée."
+                + "Appelez fetch.init_client(...) une fois la session stabilisée."
             )
 
         client = _get_or_create_client_for(url)
@@ -123,7 +125,52 @@ def call_ca_client_rest_api(url: str, extra_headers: dict | None = None):
             try:
                 return response.json()
             except (json.JSONDecodeError, httpx.DecodingError, ValueError):
+                try:
+                    return {"data": response.content}
+                except AttributeError:
+                    return {}
+        elif response.status_code == 401:
+            print(f"Échec ({response.status_code}) : {response.text}")
+            sys.exit(1)
+        else:
+            print(f"Échec ({response.status_code}) : {response.text}")
+            return None
+
+
+def post_ca_client_rest_api(
+    url: str,
+    json_data: dict[str, Any] | list[Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """
+    Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine (Méthode POST).
+    """
+    with _client_lock:
+        if not _raw_cookies:
+            raise RuntimeError(
+                "Le client HTTP n'a pas encore été initialisé. "
+                + "Appelez fetch.init_client(...) une fois la session stabilisée."
+            )
+
+        client = _get_or_create_client_for(url)
+
+        headers = {"X-XSRF-TOKEN": _current_xsrf_token(client)}
+        if extra_headers:
+            headers.update(extra_headers)
+
+        response = client.post(url, json=json_data, headers=headers)
+
+        if response.status_code in (200, 201, 202, 204):
+            if not response.content or not response.content.strip():
                 return {}
+
+            try:
+                return response.json()
+            except (json.JSONDecodeError, httpx.DecodingError, ValueError):
+                try:
+                    return {"data": response.content}
+                except AttributeError:
+                    return {}
         elif response.status_code == 401:
             print(f"Échec ({response.status_code}) : {response.text}")
             sys.exit(1)

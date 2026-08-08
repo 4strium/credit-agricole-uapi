@@ -1,0 +1,6 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportAny": "none",
+  "reportExplicitAny": "none"
+}

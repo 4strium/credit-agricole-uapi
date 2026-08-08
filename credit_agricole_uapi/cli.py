@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import os
 import signal
@@ -6,32 +7,39 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import cast
 
 import questionary
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
 from rich.console import Console
 from rich.panel import Panel
 
 from credit_agricole_uapi.api_server import get_accounts_data, start_api_server
-from credit_agricole_uapi.auth import get_local_ip, ca_login, is_port_in_use, simulate_human
-from credit_agricole_uapi.fetch import init_client, keep_alive_sso, keep_alive_bff
+from credit_agricole_uapi.auth import (
+    ca_login,
+    get_local_ip,
+    is_port_in_use,
+    simulate_human,
+)
+from credit_agricole_uapi.fetch import init_client, keep_alive_bff, keep_alive_sso
+from credit_agricole_uapi.globals import reboot_lock
 from credit_agricole_uapi.preferences import (
+    CLI_COLOR_STYLE,
     ask_preferences,
     check_preferences,
     load_preferences,
-    CLI_COLOR_STYLE,
+    validate_6digit_integer,
+    validate_integer,
 )
 
-from credit_agricole_uapi.globals import _reboot_lock
-
 APP_LOGO = """
- ██████ ██████  ███████ ██████  ██ ████████      █████   ██████  ██████  ██  ██████  ██████  ██      ███████     ██    ██  █████  ██████  ██ 
-██      ██   ██ ██      ██   ██ ██    ██        ██   ██ ██       ██   ██ ██ ██      ██    ██ ██      ██          ██    ██ ██   ██ ██   ██ ██ 
-██      ██████  █████   ██   ██ ██    ██        ███████ ██   ███ ██████  ██ ██      ██    ██ ██      █████       ██    ██ ███████ ██████  ██ 
-██      ██   ██ ██      ██   ██ ██    ██        ██   ██ ██    ██ ██   ██ ██ ██      ██    ██ ██      ██          ██    ██ ██   ██ ██      ██ 
- ██████ ██   ██ ███████ ██████  ██    ██        ██   ██  ██████  ██   ██ ██  ██████  ██████  ███████ ███████      ██████  ██   ██ ██      ██ 
+ ██████ ██████  ███████ ██████  ██ ████████      █████   ██████  ██████  ██  ██████  ██████  ██      ███████     ██    ██  █████  ██████  ██
+██      ██   ██ ██      ██   ██ ██    ██        ██   ██ ██       ██   ██ ██ ██      ██    ██ ██      ██          ██    ██ ██   ██ ██   ██ ██
+██      ██████  █████   ██   ██ ██    ██        ███████ ██   ███ ██████  ██ ██      ██    ██ ██      █████       ██    ██ ███████ ██████  ██
+██      ██   ██ ██      ██   ██ ██    ██        ██   ██ ██    ██ ██   ██ ██ ██      ██    ██ ██      ██          ██    ██ ██   ██ ██      ██
+ ██████ ██   ██ ███████ ██████  ██    ██        ██   ██  ██████  ██   ██ ██  ██████  ██████  ███████ ███████      ██████  ██   ██ ██      ██
 """
 
 console = Console()
@@ -63,7 +71,7 @@ def ensure_chromium_installed() -> None:
             console.print(
                 Panel(
                     "[bold white]Failed to install Chromium automatically.[/bold white]\n"
-                    "[dim]Please run: python -m playwright install chromium[/dim]",
+                    + "[dim]Please run: python -m playwright install chromium[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,
@@ -93,9 +101,9 @@ def stop_background_server(silent: bool = False):
     pid = int(server_pid_path.read_text().strip())
 
     try:
-        # start_new_session=True met le process dans son propre groupe :
-        # on tue tout le groupe (process principal + thread API/Playwright).
-        os.killpg(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGINT)
+        time.sleep(0.5)
+        os.kill(pid, signal.SIGTERM)
         if not silent:
             console.print(
                 f"[bold {CLI_COLOR_STYLE}]🛑  Server (PID {pid}) stopped.[/bold {CLI_COLOR_STYLE}]"
@@ -109,6 +117,27 @@ def stop_background_server(silent: bool = False):
         server_pid_path.unlink(missing_ok=True)
 
 
+def load_cookies_in_context(context: BrowserContext, page: Page):
+    urls = [
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier",
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/documents/mes-documents",
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/virement-unitaire",
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/gestion-beneficiaires",
+    ]
+
+    for i in range(len(urls)):
+        _ = page.goto(urls[i])
+
+        # On attend la stabilisation complète du réseau
+        try:
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except PlaywrightTimeoutError:
+            time.sleep(5)
+
+    init_client(context.cookies())
+    _ = context.storage_state(path=auth_path)
+
+
 def run_background_server(port: int, account_id: int, password: int):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -118,21 +147,8 @@ def run_background_server(port: int, account_id: int, password: int):
             storage_state=auth_path,
         )
         page = context.new_page()
-        page.goto(
-            f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier"
-        )
 
-        # On attend la stabilisation complète du réseau
-        try:
-            page.wait_for_load_state("networkidle", timeout=30000)
-        except PlaywrightTimeoutError:
-            print(
-                "⚠️  Le réseau ne s'est pas complètement stabilisé (connexions persistantes ?), poursuite après une marge de sécurité."
-            )
-        time.sleep(5)
-
-        init_client(context.cookies())
-        context.storage_state(path=auth_path)
+        load_cookies_in_context(context, page)
 
         api_thread = threading.Thread(
             target=start_api_server, args=(port,), daemon=True
@@ -142,7 +158,9 @@ def run_background_server(port: int, account_id: int, password: int):
         global_keep_alive(page, context, account_id, password)
 
 
-def global_keep_alive(page, context, account_id, password):
+def global_keep_alive(
+    page: Page, context: BrowserContext, account_id: int, password: int
+):
     """
     Maintiens la session active avec le site du Crédit Agricole.
     Le rafraîchissement de l'API interne pendant 57 minutes est réalisé via des requêtes HTTP.
@@ -150,8 +168,8 @@ def global_keep_alive(page, context, account_id, password):
     Le serveur API n'est démarré qu'une fois la première session stabilisée.
     """
     while True:
-        _reboot_lock.enable_reboot()
-      
+        reboot_lock.enable_reboot()
+
         ka_sso_thread = threading.Thread(target=keep_alive_sso, daemon=True)
         ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
         ka_sso_thread.start()
@@ -160,10 +178,11 @@ def global_keep_alive(page, context, account_id, password):
         ka_sso_thread.join()
         ka_bff_thread.join()
 
-        while not _reboot_lock.reboot_is_available():
+        while not reboot_lock.reboot_is_available():
             time.sleep(0.1)
 
-        _reboot_lock.set_rebooting()
+        reboot_lock.set_rebooting()
+        print("Rebooting...", flush=True)
 
         page.evaluate("""
         () => {
@@ -173,10 +192,9 @@ def global_keep_alive(page, context, account_id, password):
         """)
 
         context.clear_cookies()
-        page.reload()
-        time.sleep(2)
-        ca_login(page, console, account_id, password, page.url)
-        time.sleep(2)
+        _ = page.reload()
+        ca_login(page, account_id, password, page.url)
+        load_cookies_in_context(context, page)
 
 
 def main():
@@ -185,9 +203,6 @@ def main():
     console.print(
         "[italic white]Crédit Agricole UAPI is [bold]NOT[/bold] affiliated with Crédit Agricole S.A.\n[/italic white]"
     )
-
-    data_folder = Path("data")
-    data_folder.mkdir(parents=True, exist_ok=True)
 
     time.sleep(2)
 
@@ -217,19 +232,21 @@ def main():
 
     console.print("")
 
-    account_id = questionary.text(
-        "Enter your banking ID (e.g., your account number) :",
-        validate=lambda val: val.isdigit() or "Please enter a valid integer.",
-    ).ask()
-    account_id = int(account_id)
+    account_id = cast(
+        int,
+        questionary.text(
+            "Enter your banking ID (e.g., your account number) :",
+            validate=validate_integer,
+        ).ask(),
+    )
 
-    password = questionary.password(
-        "Enter your app password (6-digit integer) :",
-        validate=lambda val: (
-            val.isdigit() and len(val) == 6 or "Please enter a valid 6-digit integer."
-        ),
-    ).ask()
-    password = int(password)
+    password = cast(
+        int,
+        questionary.password(
+            "Enter your app password (6-digit integer) :",
+            validate=validate_6digit_integer,
+        ).ask(),
+    )
     console.print("")
 
     stop_background_server(silent=True)
@@ -248,7 +265,7 @@ def main():
 
             page = context.new_page()
 
-            page.goto(
+            _ = page.goto(
                 f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier"
             )
 
@@ -260,26 +277,26 @@ def main():
                 spinner="dots",
                 spinner_style="yellow",
             ):
-                ca_login(page, console, account_id, password, initial_url)
+                ca_login(page, account_id, password, initial_url)
 
                 # On sauvegarde l'état de la session (cookies + storage) sur
                 # disque afin que le sous-processus de fond puisse démarrer sa
                 # propre session Playwright à partir d'un état déjà authentifié.
-                context.storage_state(path=auth_path)
+                _ = context.storage_state(path=auth_path)
 
                 # Construction de l'unique client HTTP persistant de
                 # l'application, à partir des cookies fraîchement stabilisés.
                 init_client(context.cookies())
                 browser.close()
 
-            get_accounts_data()
+            _ = get_accounts_data()
 
             console.print(
                 f"[bold {CLI_COLOR_STYLE}]\n🎉 Authentification successful 🎉[/bold {CLI_COLOR_STYLE}]"
             )
 
-            port = load_preferences().get("api_port")
-            if not port:
+            port: str | bool | int | None = load_preferences().get("api_port")
+            if not port or not isinstance(port, int):
                 return
 
             if is_port_in_use(port):
@@ -292,20 +309,12 @@ def main():
             console.print(
                 Panel.fit(
                     f"[bold {CLI_COLOR_STYLE}]🚀 API Gateway server is running in background![/bold {CLI_COLOR_STYLE}]\n\n"
-                    f"• [bold white]Local URL:[/bold white]    [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link]\n"
-                    f"• [bold white]Network URL:[/bold white] [link=http://{local_ip}:{port}]http://{local_ip}:{port}[/link]\n\n"
-                    f"[white][bold red][code]{get_launch_command()} --stop[/code][/bold red] to stop the server.[/white]",
+                    + f"• [bold white]Local URL:[/bold white]    [link=http://127.0.0.1:{port}]http://127.0.0.1:{port}[/link]\n"
+                    + f"• [bold white]Network URL:[/bold white] [link=http://{local_ip}:{port}]http://{local_ip}:{port}[/link]\n\n"
+                    + f"[white][bold red][code]{get_launch_command()} --stop[/code][/bold red] to stop the server.[/white]",
                     border_style=f"{CLI_COLOR_STYLE}",
                     padding=(1, 2),
                 )
-            )
-
-            time.sleep(2)
-            console.print(
-                f'[bold {CLI_COLOR_STYLE}]\n😉 Typing [code]curl -s -X GET "http://127.0.0.1:{port}/api/accounts"[/code] is a good way to test the API.[/bold {CLI_COLOR_STYLE}]'
-            )
-            console.print(
-                f"[bold {CLI_COLOR_STYLE}]\n📚 All endpoints are documented at [link=http://{local_ip}:{port}/docs]http://{local_ip}:{port}/docs[/link].\n[/bold {CLI_COLOR_STYLE}]"
             )
 
             with open(server_log_path, "a") as logfile:
@@ -328,7 +337,15 @@ def main():
                     stdin=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-                server_pid_path.write_text(str(process.pid))
+                _ = server_pid_path.write_text(str(process.pid))
+
+            time.sleep(2)
+            console.print(
+                f'[bold {CLI_COLOR_STYLE}]\n😉 Typing [code]curl -s -X GET "http://127.0.0.1:{port}/api/accounts"[/code] is a good way to test the API.[/bold {CLI_COLOR_STYLE}]'
+            )
+            console.print(
+                f"[bold {CLI_COLOR_STYLE}]\n📚 All endpoints are documented at [link=http://{local_ip}:{port}/docs]http://{local_ip}:{port}/docs[/link].\n[/bold {CLI_COLOR_STYLE}]"
+            )
 
             return
 
@@ -336,7 +353,7 @@ def main():
             console.print(
                 Panel(
                     "[bold white]Time limit exceeded: the form did not appear in time.[/bold white]\n"
-                    "[dim]Please try again later.[/dim]",
+                    + "[dim]Please try again later.[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,
@@ -348,7 +365,7 @@ def main():
             console.print(
                 Panel(
                     f"[bold white]Authentication error: {e}[/bold white]\n"
-                    "[dim]Please try again later.[/dim]",
+                    + "[dim]Please try again later.[/dim]",
                     title="[bold white on red] ERROR [/bold white on red]",
                     border_style="red",
                     expand=False,
@@ -361,17 +378,19 @@ def main():
 def run():
     ensure_chromium_installed()
     parser = argparse.ArgumentParser()
-    parser.add_argument(
+    _ = parser.add_argument(
         "--background",
         action="store_true",
         help="Internal option for background mode",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--port", type=int, default=8000, help="Listening port for the API"
     )
-    parser.add_argument("--account-id", type=int, help="Account ID for authentication")
-    parser.add_argument("--password", type=int, help="Password for authentication")
-    parser.add_argument(
+    _ = parser.add_argument(
+        "--account-id", type=int, help="Account ID for authentication"
+    )
+    _ = parser.add_argument("--password", type=int, help="Password for authentication")
+    _ = parser.add_argument(
         "--stop",
         action="store_true",
         help="Stop the background server started previously",
