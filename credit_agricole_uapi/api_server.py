@@ -32,7 +32,7 @@ app = FastAPI(
         "startup). No API key is needed to call this local server, but the "
         "server itself must be logged in to Crédit Agricole to answer requests."
     ),
-    version="0.1.0",
+    version="0.1.1",
     contact={"name": "credit-agricole-uapi"},
 )
 
