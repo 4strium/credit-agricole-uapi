@@ -32,8 +32,6 @@ python3 -m credit_agricole_uapi.cli
 
 The server listens on the port configured in preferences (default shown by the CLI). Interactive docs are available once the server runs (see below).
 
-(If you publish a package, you can provide an equivalent pip install + command here.)
-
 ## Interactive API documentation
 
 If the server runs using FastAPI, visit:
