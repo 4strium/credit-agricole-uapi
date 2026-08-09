@@ -14,7 +14,13 @@ Important: no external API key is required to call the local server, but the ser
 
 ## Running the API server
 
-### From source (development)
+### Option 1: via pip (recommended)
+```bash
+  pip install credit-agricole-uapi
+  credit-agricole-uapi
+```
+
+### Option 2: from source (development)
 Create a venv, install requirements and run the package entrypoint (adjust the command if your project uses a different CLI module):
 
 ```bash
