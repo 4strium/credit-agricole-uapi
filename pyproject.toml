@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credit-agricole-uapi"
-version = "1.0.1"
+version = "0.1.0"
 description = "Lightweight & Fast unofficial REST API for Credit Agricole"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "4strium" }]
+authors = [{ name = "4strium", email = "romain@mellaza.eu" }]
 keywords = ["credit-agricole", "api", "unofficial", "fastapi", "fintech"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -26,16 +26,14 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
-    "fastapi==0.140.0",
+    "fastapi==0.141.1",
     "httpx==0.28.1",
-    "playwright==1.61.0",
-    "prompt_toolkit==3.0.52",
+    "playwright==1.62.0",
+    "prompt_toolkit==3.0.53",
     "pydantic==2.13.4",
-    "qrcode==8.2",
     "questionary==2.1.1",
     "rich==15.0.0",
-    "uvicorn==0.51.0",
-    "websockets==16.1.1",
+    "uvicorn==0.52.1",
 ]
 
 [project.urls]
