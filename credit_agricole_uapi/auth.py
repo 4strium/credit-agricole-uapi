@@ -90,8 +90,6 @@ def is_port_in_use(port: int) -> bool:
 def simulate_human(page: Page) -> None:
     start_time = time.time()
     while True:
-        print(page.url, flush=True)
-
         if time.time() - start_time > 3300:
             break
 

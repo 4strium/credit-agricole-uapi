@@ -120,6 +120,7 @@ def stop_background_server(silent: bool = False):
 def load_cookies_in_context(context: BrowserContext, page: Page):
     urls = [
         f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier",
+        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/operations-courantes/telechargement-operations",
         f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/documents/mes-documents",
         f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/virement-unitaire",
         f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/gestion-beneficiaires",

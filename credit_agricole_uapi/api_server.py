@@ -1,7 +1,10 @@
+import csv
+import io
+import re
 import time
 import urllib.parse
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -105,6 +108,57 @@ def fix_struct(
         return data
 
 
+def _to_float(value: str | None) -> float | None:
+    if not value or not value.strip():
+        return None
+    return float(value.replace("\xa0", " ").replace(" ", "").replace(",", "."))
+
+
+def _clean_libelle(libelle: str) -> str:
+    lines = [l.strip() for l in libelle.split("\n") if l.strip()]
+    return " - ".join(lines)
+
+
+def parse_releve(raw: bytes, encoding: str = "cp1252") -> dict[str, Any]:
+    text = raw.decode(encoding)
+    result: dict[str, Any] = {"titulaire": None, "date_extraction": None, "comptes": []}
+    compte_courant : dict[str, Any] | None = None
+    pending_nom_carte = None
+
+    for row in csv.reader(io.StringIO(text), delimiter=";"):
+        if not row or all(not f.strip() for f in row):
+            continue
+        first = row[0].strip()
+
+        if m := re.match(r"Téléchargement du (\d{2}/\d{2}/\d{4})", first):
+            result["date_extraction"] = m.group(1)
+        elif re.match(r"^M\.?\s+", first) and "carte" not in first.lower():
+            result["titulaire"] = re.sub(r"\s+", " ", first).strip()
+        elif m := re.match(r"(.+?)\s*carte\s*n[°o]\s*(\d+)", first):
+            pending_nom_carte = (m.group(1).strip(), m.group(2).strip())
+        elif m := re.match(r"Solde au (\d{2}/\d{2}/\d{4})\s+([\d\s]+,\d{2})", first):
+            nom, carte = pending_nom_carte or (None, None)
+            compte_courant = {
+                "nom": nom,
+                "numero_carte": carte,
+                "solde_date": m.group(1),
+                "solde": _to_float(m.group(2)),
+                "operations": [],
+            }
+            result["comptes"].append(compte_courant)
+        elif re.match(r"^\d{2}/\d{2}/\d{4}$", first) and compte_courant:
+            compte_courant["operations"].append(
+                {
+                    "date": first,
+                    "libelle": _clean_libelle(row[1]) if len(row) > 1 else "",
+                    "debit": _to_float(row[2]) if len(row) > 2 else None,
+                    "credit": _to_float(row[3]) if len(row) > 3 else None,
+                }
+            )
+
+    return result
+
+
 def bank_product_cleaner(data: list[dict[str, Any]]) -> None:
     for element in data:
         element.pop("libelle_role_intervenant_contrat", None)
@@ -170,7 +224,7 @@ def regular_post(
     specific_key: str | None = None,
     cleaner: Callable[[Any], Any] | None = None,
     extra_headers: dict[str, str] | None = None,
-) -> dict[str, Any] | list[Any] | str | int:
+) -> dict[str, Any] | list[Any] | str | int | bytes:
     reboot_lock.disable_reboot()
 
     data = post_ca_client_rest_api(endpoint, json_data, extra_headers)
@@ -226,12 +280,12 @@ def document_fetcher(document: dict[str, Any]) -> str:
     return ""
 
 
-def _login_transaction_subdomain() -> str:
+def _login_subdomain(id: str, subdomain: str) -> str:
     encrypted_token = cast(
         dict[str, str | int],
         regular_post(
             "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
-            {"id_parcours": "VIREMENT-UNITAIRE"},
+            {"id_parcours": id},
             "context_token",
         ),
     )["encrypted_token"]
@@ -239,28 +293,7 @@ def _login_transaction_subdomain() -> str:
     context_id = cast(
         dict[str, str],
         regular_post(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/login",
-            {"token": encrypted_token},
-        ),
-    )["contextId"]
-
-    return context_id
-
-
-def _login_beneficiary_subdomain() -> str:
-    encrypted_token = cast(
-        dict[str, str | int],
-        regular_post(
-            "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
-            {"id_parcours": "GESTION-BENEFICIAIRES"},
-            "context_token",
-        ),
-    )["encrypted_token"]
-
-    context_id = cast(
-        dict[str, str],
-        regular_post(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/login",
+            f"{subdomain}/customer/login",
             {"token": encrypted_token},
         ),
     )["contextId"]
@@ -367,7 +400,10 @@ def get_documents_list():
 )
 def get_transaction_enabled_accounts() -> dict[str, Any]:
 
-    _ = _login_transaction_subdomain()
+    _ = _login_subdomain(
+        "VIREMENT-UNITAIRE",
+        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
+    )
 
     res: dict[str, Any] = {}
 
@@ -402,7 +438,10 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
             status_code=400, detail="Source and recipient account cannot be the same"
         )
 
-    context_id = _login_transaction_subdomain()
+    context_id = _login_subdomain(
+        "VIREMENT-UNITAIRE",
+        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
+    )
 
     transfer_infos = cast(
         dict[str, Any],
@@ -480,7 +519,10 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
     response_description="",
 )
 def add_beneficiary(params: AddBeneficiaryRequest) -> dict[str, str]:
-    context_id = _login_beneficiary_subdomain()
+    context_id = _login_subdomain(
+        "GESTION-BENEFICIAIRES",
+        f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf",
+    )
 
     benef_bank_infos = cast(
         dict[str, Any],
@@ -599,6 +641,66 @@ def add_beneficiary(params: AddBeneficiaryRequest) -> dict[str, str]:
     return {
         "result": f"The new beneficiary ({new_beneficiary.get('name')} / {new_beneficiary.get('custom_label')}) has been created, it will be available at {activation_date_utc.strftime('%d/%m/%Y %H:%M:%S')}"
     }
+
+
+@app.get(
+    "/api/transactions",
+    tags=["Transactions"],
+    summary="Retrieve the list of the last year's transactions",
+    description=(""),
+    response_description="",
+)
+def get_transactions() -> list[dict[str, Any]]:
+    context_id = _login_subdomain(
+        "TELECHARGER-OPERATIONS",
+        f"https://telechargement-operations.credit-agricole.fr{load_preferences().get('regional_branch')}bff",
+    )
+
+    contracts = cast(
+        list[dict[str, str]],
+        regular_get(
+            f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/contrats?contextId={context_id}",
+            specific_key="contractElements",
+        ),
+    )
+
+    accounts_number = [contract.get("accountNumber") for contract in contracts]
+
+    today = date.today()
+
+    # Date d'il y a un an
+    # Remplacement de l'année pour gérer correctement la même date 1 ans plus tôt
+    try:
+        one_year_ago = today.replace(year=today.year - 1)
+    except ValueError:
+        # Gère le cas particulier du 29 février lors d'une année bissextile -> bascule au 28 février
+        one_year_ago = today.replace(year=today.year - 1, day=28)
+
+    payload = {
+        "contractElements": [
+            {
+                "numero_contrat": account,
+                "date_debut_telechargement": one_year_ago.strftime("%Y-%m-%d"),
+                "date_fin_telechargement": today.strftime("%Y-%m-%d"),
+            }
+            for account in accounts_number
+        ],
+        "format": "CSV",
+        "showValueDate": False,
+    }
+
+    data = cast(
+        bytes,
+        regular_post(
+            f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/generer_document?contextId={context_id}",
+            payload,
+            specific_key="data",
+        ),
+    )
+
+    parsed_data = parse_releve(data)
+
+    return parsed_data.get("comptes", [])
 
 
 @app.post(
