@@ -122,7 +122,7 @@ def _clean_libelle(libelle: str) -> str:
 def parse_releve(raw: bytes, encoding: str = "cp1252") -> dict[str, Any]:
     text = raw.decode(encoding)
     result: dict[str, Any] = {"titulaire": None, "date_extraction": None, "comptes": []}
-    compte_courant : dict[str, Any] | None = None
+    compte_courant: dict[str, Any] | None = None
     pending_nom_carte = None
 
     for row in csv.reader(io.StringIO(text), delimiter=";"):
@@ -377,21 +377,6 @@ def get_investments_data():
 
 
 @app.get(
-    "/api/documents-list",
-    tags=["Documents"],
-    summary="Get documents list",
-    description=("Returns the list of the customer's documents."),
-    response_description="List of documents.",
-)
-def get_documents_list():
-    return regular_get(
-        f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-        "listeDocument",
-        document_attributes_cleaner,
-    )
-
-
-@app.get(
     "/api/transaction-accounts",
     tags=["Transactions"],
     summary="Get transaction accounts",
@@ -399,29 +384,34 @@ def get_documents_list():
     response_description="",
 )
 def get_transaction_enabled_accounts() -> dict[str, Any]:
+    if any(
+        url.endswith("virement-unitaire")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        _ = _login_subdomain(
+            "VIREMENT-UNITAIRE",
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
+        )
 
-    _ = _login_subdomain(
-        "VIREMENT-UNITAIRE",
-        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
-    )
+        res: dict[str, Any] = {}
 
-    res: dict[str, Any] = {}
+        res["internal"] = cast(
+            list[dict[str, Any]],
+            regular_get(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+                "my_accounts",
+            ),
+        )[0]["accounts"]
 
-    res["internal"] = cast(
-        list[dict[str, Any]],
-        regular_get(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
-            "my_accounts",
-        ),
-    )[0]["accounts"]
+        res["external"] = regular_get(
+            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+            "beneficiaries",
+            beneficiary_cleaner,
+        )
 
-    res["external"] = regular_get(
-        f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
-        "beneficiaries",
-        beneficiary_cleaner,
-    )
-
-    return res
+        return res
+    else:
+        return {"error": "❌ Transaction submodule not enabled"}
 
 
 @app.post(
@@ -432,83 +422,89 @@ def get_transaction_enabled_accounts() -> dict[str, Any]:
     response_description="",
 )
 def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
+    if any(
+        url.endswith("virement-unitaire")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ) and cast(bool, load_preferences().get("active_commands", [])):
+        if params.source_account_iban == params.recipient_account_iban:
+            raise HTTPException(
+                status_code=400,
+                detail="Source and recipient account cannot be the same",
+            )
 
-    if params.source_account_iban == params.recipient_account_iban:
-        raise HTTPException(
-            status_code=400, detail="Source and recipient account cannot be the same"
+        context_id = _login_subdomain(
+            "VIREMENT-UNITAIRE",
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
         )
 
-    context_id = _login_subdomain(
-        "VIREMENT-UNITAIRE",
-        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
-    )
-
-    transfer_infos = cast(
-        dict[str, Any],
-        regular_get(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
-        ),
-    )
-
-    transfer_flow_id = cast(str, transfer_infos["transfer_flow_id"])
-    internal_accounts = cast(
-        list[dict[str, Any]], transfer_infos["my_accounts"][0]["accounts"]
-    )
-    external_accounts = cast(
-        list[dict[str, Any]],
-        regular_get(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
-            "beneficiaries",
-        ),
-    )
-
-    source_account_data = {}
-    recipient_account_data = {}
-
-    for internal_account in internal_accounts:
-        if internal_account["iban"] == params.source_account_iban:
-            source_account_data = internal_account
-        elif internal_account["iban"] == params.recipient_account_iban:
-            recipient_account_data = {"internal": internal_account}
-
-    for external_account in external_accounts:
-        if external_account["iban"] == params.recipient_account_iban:
-            recipient_account_data = {"external": external_account}
-
-    if source_account_data == {} or recipient_account_data == {}:
-        raise HTTPException(
-            status_code=404, detail="Source or recipient account not found"
+        transfer_infos = cast(
+            dict[str, Any],
+            regular_get(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+            ),
         )
 
-    transaction_package = {
-        "virement": {
-            "transfer_flow_id": transfer_flow_id,
-            "source_account": source_account_data,
-            "recipient_account": recipient_account_data,
-            "date": time.time_ns() // 1_000_000,
-            "amount": str(round(params.amount, 2)),
-            "motif": params.motif,
-            "additional_motif": params.additional_motif,
-            "transfer_frequency_code": "U",
-            "end_due_date": 0,
+        transfer_flow_id = cast(str, transfer_infos["transfer_flow_id"])
+        internal_accounts = cast(
+            list[dict[str, Any]], transfer_infos["my_accounts"][0]["accounts"]
+        )
+        external_accounts = cast(
+            list[dict[str, Any]],
+            regular_get(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+                "beneficiaries",
+            ),
+        )
+
+        source_account_data = {}
+        recipient_account_data = {}
+
+        for internal_account in internal_accounts:
+            if internal_account["iban"] == params.source_account_iban:
+                source_account_data = internal_account
+            elif internal_account["iban"] == params.recipient_account_iban:
+                recipient_account_data = {"internal": internal_account}
+
+        for external_account in external_accounts:
+            if external_account["iban"] == params.recipient_account_iban:
+                recipient_account_data = {"external": external_account}
+
+        if source_account_data == {} or recipient_account_data == {}:
+            raise HTTPException(
+                status_code=404, detail="Source or recipient account not found"
+            )
+
+        transaction_package = {
+            "virement": {
+                "transfer_flow_id": transfer_flow_id,
+                "source_account": source_account_data,
+                "recipient_account": recipient_account_data,
+                "date": time.time_ns() // 1_000_000,
+                "amount": str(round(params.amount, 2)),
+                "motif": params.motif,
+                "additional_motif": params.additional_motif,
+                "transfer_frequency_code": "U",
+                "end_due_date": 0,
+            }
         }
-    }
 
-    confirm_transfer_flow_id = cast(
-        str,
-        regular_post(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
-            transaction_package,
-            "transfer_flow_id",
-        ),
-    )
+        confirm_transfer_flow_id = cast(
+            str,
+            regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
+                transaction_package,
+                "transfer_flow_id",
+            ),
+        )
 
-    _ = regular_post(
-        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
-        {"transfer_flow_id": confirm_transfer_flow_id},
-    )
+        _ = regular_post(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
+            {"transfer_flow_id": confirm_transfer_flow_id},
+        )
 
-    return {"Result": "Transaction carried out successfully"}
+        return {"Result": "✅ Transaction carried out successfully"}
+    else:
+        return {"error": "❌ Transaction submodule not enabled"}
 
 
 @app.post(
@@ -519,188 +515,224 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
     response_description="",
 )
 def add_beneficiary(params: AddBeneficiaryRequest) -> dict[str, str]:
-    context_id = _login_subdomain(
-        "GESTION-BENEFICIAIRES",
-        f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf",
-    )
-
-    benef_bank_infos = cast(
-        dict[str, Any],
-        regular_post(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries/check?contextId={context_id}",
-            {"iban": params.iban},
-        ),
-    )
-
-    vop_infos = cast(
-        dict[str, Any],
-        regular_post(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/vop",
-            {
-                "bic_entity": benef_bank_infos.get("bic"),
-                "iban_payee": params.iban,
-                "identifier_value": params.name,
-                "type_of_use": "AUTR",
-            },
-        ),
-    )
-
-    if vop_infos.get("vop_result") != "MTCH":
-        raise HTTPException(
-            status_code=400,
-            detail="We did not find the account corresponding to the provided IBAN and name.",
+    if any(
+        url.endswith("gestion-beneficiaires")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        context_id = _login_subdomain(
+            "GESTION-BENEFICIAIRES",
+            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf",
         )
 
-    date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        benef_bank_infos = cast(
+            dict[str, Any],
+            regular_post(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries/check?contextId={context_id}",
+                {"iban": params.iban},
+            ),
+        )
 
-    auth_by_factor_id = cast(
-        dict[str, str],
-        regular_post(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/settings",  # Trigger SecuriPass
-            {
-                "templateSecuripass": {
-                    "donnees_usage": {
-                        "titre": "AF_AJ_BNF",
-                        "sous_titre": "Confirmer l'ajout du bénéficiaire",
-                        "detail_operation": [
-                            {"libelle": "beneficiary_name", "texte": params.name},
-                            {
-                                "libelle": "beneficiary_custom_label",
-                                "texte": params.identifier,
-                            },
-                            {"libelle": "beneficiary_account", "texte": params.iban},
-                            {
-                                "libelle": "beneficiary_bank",
-                                "texte": benef_bank_infos.get("bank_label"),
-                            },
-                            {"libelle": "beneficiary_country", "texte": ""},
-                            {"libelle": "Date_ISO_8601", "texte": date},
-                            {"libelle": "vop_result", "texte": "MTCH"},
-                        ],
-                    }
+        vop_infos = cast(
+            dict[str, Any],
+            regular_post(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/vop",
+                {
+                    "bic_entity": benef_bank_infos.get("bic"),
+                    "iban_payee": params.iban,
+                    "identifier_value": params.name,
+                    "type_of_use": "AUTR",
                 },
-                "authUsage": "U001",
-                "champDescriptionLibreSecuripass": f"IBAN : {params.iban} / Nom réglementaire : {params.name} / Libellé personnalisé : {params.identifier} /  Résultat vop : Le nom correspond à l’IBAN",
-            },
-        ),
-    )
+            ),
+        )
 
-    auth_method = cast(
-        str,
-        regular_get(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/active",
-            "method",
-            extra_headers=auth_by_factor_id,
-        ),
-    )
-
-    _ = regular_get(
-        f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/{auth_method}/request",
-        extra_headers=auth_by_factor_id,
-    )
-
-    fst_ask_time = time.time()
-    while True:
-        if time.time() - fst_ask_time > 60:
+        if vop_infos.get("vop_result") != "MTCH":
             raise HTTPException(
-                status_code=504,
-                detail="The authentication request via your phone has expired.",
+                status_code=400,
+                detail="We did not find the account corresponding to the provided IBAN and name.",
             )
 
-        status_code = cast(
-            int,
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        auth_by_factor_id = cast(
+            dict[str, str],
             regular_post(
-                f"https://beneficiaire-npc-unitaire.credit-agricole.fr/{load_preferences().get('regional_branch')}/bffgbnf/customer/authentication/factors/{auth_method}/validation",
-                specific_key="status",
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/settings",  # Trigger SecuriPass
+                {
+                    "templateSecuripass": {
+                        "donnees_usage": {
+                            "titre": "AF_AJ_BNF",
+                            "sous_titre": "Confirmer l'ajout du bénéficiaire",
+                            "detail_operation": [
+                                {"libelle": "beneficiary_name", "texte": params.name},
+                                {
+                                    "libelle": "beneficiary_custom_label",
+                                    "texte": params.identifier,
+                                },
+                                {
+                                    "libelle": "beneficiary_account",
+                                    "texte": params.iban,
+                                },
+                                {
+                                    "libelle": "beneficiary_bank",
+                                    "texte": benef_bank_infos.get("bank_label"),
+                                },
+                                {"libelle": "beneficiary_country", "texte": ""},
+                                {"libelle": "Date_ISO_8601", "texte": date},
+                                {"libelle": "vop_result", "texte": "MTCH"},
+                            ],
+                        }
+                    },
+                    "authUsage": "U001",
+                    "champDescriptionLibreSecuripass": f"IBAN : {params.iban} / Nom réglementaire : {params.name} / Libellé personnalisé : {params.identifier} /  Résultat vop : Le nom correspond à l’IBAN",
+                },
+            ),
+        )
+
+        auth_method = cast(
+            str,
+            regular_get(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/active",
+                "method",
                 extra_headers=auth_by_factor_id,
             ),
         )
 
-        if status_code == 200:
-            break
-
-        time.sleep(4)
-
-    new_beneficiary = cast(
-        dict[str, Any],
-        regular_post(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
-            {
-                "name": params.name,
-                "beneficiary_flow_id": benef_bank_infos.get("beneficiary_flow_id"),
-                "custom_label": params.identifier,
-                "id_vop": vop_infos.get("vop_entity_id"),
-            },
+        _ = regular_get(
+            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/{auth_method}/request",
             extra_headers=auth_by_factor_id,
-        ),
-    )
+        )
 
-    activation_date_utc = datetime.fromtimestamp(
-        cast(int, new_beneficiary.get("activationDate")) / 1000, tz=timezone.utc
-    ).astimezone()
-    return {
-        "result": f"The new beneficiary ({new_beneficiary.get('name')} / {new_beneficiary.get('custom_label')}) has been created, it will be available at {activation_date_utc.strftime('%d/%m/%Y %H:%M:%S')}"
-    }
+        fst_ask_time = time.time()
+        while True:
+            if time.time() - fst_ask_time > 60:
+                raise HTTPException(
+                    status_code=504,
+                    detail="The authentication request via your phone has expired.",
+                )
+
+            status_code = cast(
+                int,
+                regular_post(
+                    f"https://beneficiaire-npc-unitaire.credit-agricole.fr/{load_preferences().get('regional_branch')}/bffgbnf/customer/authentication/factors/{auth_method}/validation",
+                    specific_key="status",
+                    extra_headers=auth_by_factor_id,
+                ),
+            )
+
+            if status_code == 200:
+                break
+
+            time.sleep(4)
+
+        new_beneficiary = cast(
+            dict[str, Any],
+            regular_post(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+                {
+                    "name": params.name,
+                    "beneficiary_flow_id": benef_bank_infos.get("beneficiary_flow_id"),
+                    "custom_label": params.identifier,
+                    "id_vop": vop_infos.get("vop_entity_id"),
+                },
+                extra_headers=auth_by_factor_id,
+            ),
+        )
+
+        activation_date_utc = datetime.fromtimestamp(
+            cast(int, new_beneficiary.get("activationDate")) / 1000, tz=timezone.utc
+        ).astimezone()
+        return {
+            "result": f"The new beneficiary ({new_beneficiary.get('name')} / {new_beneficiary.get('custom_label')}) has been created, it will be available at {activation_date_utc.strftime('%d/%m/%Y %H:%M:%S')}"
+        }
+    else:
+        return {"error": "❌ Beneficiaries submodule not enabled"}
 
 
 @app.get(
-    "/api/transactions",
+    "/api/past-transactions",
     tags=["Transactions"],
     summary="Retrieve the list of the last year's transactions",
     description=(""),
     response_description="",
 )
-def get_transactions() -> list[dict[str, Any]]:
-    context_id = _login_subdomain(
-        "TELECHARGER-OPERATIONS",
-        f"https://telechargement-operations.credit-agricole.fr{load_preferences().get('regional_branch')}bff",
-    )
+def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
+    if any(
+        url.endswith("telechargement-operations")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        context_id = _login_subdomain(
+            "TELECHARGER-OPERATIONS",
+            f"https://telechargement-operations.credit-agricole.fr{load_preferences().get('regional_branch')}bff",
+        )
 
-    contracts = cast(
-        list[dict[str, str]],
-        regular_get(
-            f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/contrats?contextId={context_id}",
-            specific_key="contractElements",
-        ),
-    )
+        contracts = cast(
+            list[dict[str, str]],
+            regular_get(
+                f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/contrats?contextId={context_id}",
+                specific_key="contractElements",
+            ),
+        )
 
-    accounts_number = [contract.get("accountNumber") for contract in contracts]
+        accounts_number = [contract.get("accountNumber") for contract in contracts]
 
-    today = date.today()
+        today = date.today()
 
-    # Date d'il y a un an
-    # Remplacement de l'année pour gérer correctement la même date 1 ans plus tôt
-    try:
-        one_year_ago = today.replace(year=today.year - 1)
-    except ValueError:
-        # Gère le cas particulier du 29 février lors d'une année bissextile -> bascule au 28 février
-        one_year_ago = today.replace(year=today.year - 1, day=28)
+        # Date d'il y a un an
+        # Remplacement de l'année pour gérer correctement la même date 1 ans plus tôt
+        try:
+            one_year_ago = today.replace(year=today.year - 1)
+        except ValueError:
+            # Gère le cas particulier du 29 février lors d'une année bissextile -> bascule au 28 février
+            one_year_ago = today.replace(year=today.year - 1, day=28)
 
-    payload = {
-        "contractElements": [
-            {
-                "numero_contrat": account,
-                "date_debut_telechargement": one_year_ago.strftime("%Y-%m-%d"),
-                "date_fin_telechargement": today.strftime("%Y-%m-%d"),
-            }
-            for account in accounts_number
-        ],
-        "format": "CSV",
-        "showValueDate": False,
-    }
+        payload = {
+            "contractElements": [
+                {
+                    "numero_contrat": account,
+                    "date_debut_telechargement": one_year_ago.strftime("%Y-%m-%d"),
+                    "date_fin_telechargement": today.strftime("%Y-%m-%d"),
+                }
+                for account in accounts_number
+            ],
+            "format": "CSV",
+            "showValueDate": False,
+        }
 
-    data = cast(
-        bytes,
-        regular_post(
-            f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/generer_document?contextId={context_id}",
-            payload,
-            specific_key="data",
-        ),
-    )
+        data = cast(
+            bytes,
+            regular_post(
+                f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/generer_document?contextId={context_id}",
+                payload,
+                specific_key="data",
+            ),
+        )
 
-    parsed_data = parse_releve(data)
+        parsed_data = parse_releve(data)
 
-    return parsed_data.get("comptes", [])
+        return parsed_data.get("comptes", [])
+    else:
+        return {"error": "❌ Details of debits/credits submodule not enabled"}
+
+
+@app.get(
+    "/api/documents-list",
+    tags=["Documents"],
+    summary="Get documents list",
+    description=("Returns the list of the customer's documents."),
+    response_description="List of documents.",
+)
+def get_documents_list():
+    if any(
+        url.endswith("mes-documents")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        return regular_get(
+            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+            "listeDocument",
+            document_attributes_cleaner,
+        )
+    else:
+        return {"error": "❌ Documents submodule not enabled"}
 
 
 @app.post(
@@ -711,42 +743,56 @@ def get_transactions() -> list[dict[str, Any]]:
     response_description="",
 )
 def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
-    documents_list = cast(
-        list[dict[str, Any]],
-        regular_get(
-            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-            "listeDocument",
-        ),
-    )
+    if any(
+        url.endswith("mes-documents")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        documents_list = cast(
+            list[dict[str, Any]],
+            regular_get(
+                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+                "listeDocument",
+            ),
+        )
 
-    for document in documents_list:
-        if document["id"] == params.id:
-            return {"url": document_fetcher(document)}
-    return {}
+        for document in documents_list:
+            if document["id"] == params.id:
+                return {"url": document_fetcher(document)}
+        return {}
+    else:
+        return {"error": "❌ Documents submodule not enabled"}
 
 
 @app.post(
-    "/api/document-by-type",
+    "/api/documents-by-type",
     tags=["Documents"],
-    summary="Download document by its type.",
-    description=("Download a document by its type."),
+    summary="Download several documents by their type.",
+    description=("Download several documents by their type."),
     response_description="",
 )
-def download_document_by_type(params: DocumentTypeRequest) -> list[dict[str, str]]:
-    documents_list = cast(
-        list[dict[str, Any]],
-        regular_get(
-            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-            "listeDocument",
-        ),
-    )
+def download_document_by_type(
+    params: DocumentTypeRequest,
+) -> list[dict[str, str]] | dict[str, str]:
+    if any(
+        url.endswith("mes-documents")
+        for url in cast(str, load_preferences().get("active_subdomains_urls", []))
+    ):
+        documents_list = cast(
+            list[dict[str, Any]],
+            regular_get(
+                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+                "listeDocument",
+            ),
+        )
 
-    result: list[dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
 
-    for document in documents_list:
-        if document["libelleTypeDocument"] == params.type:
-            result.append({document["libelle"]: document_fetcher(document)})
-    return result
+        for document in documents_list:
+            if document["libelleTypeDocument"] == params.type:
+                result.append({document["libelle"]: document_fetcher(document)})
+        return result
+    else:
+        return {"error": "❌ Documents submodule not enabled"}
 
 
 def start_api_server(port: int) -> None:

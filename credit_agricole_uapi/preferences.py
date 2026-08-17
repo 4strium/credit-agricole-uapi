@@ -19,12 +19,20 @@ def validate_6digit_integer(val: str) -> bool | str:
     return val.isdigit() and len(val) == 6 or "Please enter a valid 6-digit integer."
 
 
-def save_preferences(user_agreement: bool, regional_branch: str, api_port: int):
+def save_preferences(
+    user_agreement: bool,
+    active_commands: bool,
+    regional_branch: str,
+    active_subdomains: list[str],
+    api_port: int,
+):
     path = Path("data/preferences.json")
     with path.open("w") as f:
         json.dump(
             {
                 "user_agreement": user_agreement,
+                "active_commands": active_commands,
+                "active_subdomains_urls": active_subdomains,
                 "regional_branch": regional_branch,
                 "api_port": api_port,
             },
@@ -93,6 +101,10 @@ def ask_preferences(console: Console):
         f"[bold {CLI_COLOR_STYLE}]☑️  The user has been made aware of the potential risks.\n[/bold {CLI_COLOR_STYLE}]"
     )
 
+    active_commands = questionary.confirm(
+        "Enable actions commands (e.g. transactions, beneficiaries management)?"
+    ).ask()
+
     caisses_regionales = {
         "Alpes Provence": "/ca-alpesprovence/",
         "Alsace Vosges": "/ca-alsace-vosges/",
@@ -149,13 +161,47 @@ def ask_preferences(console: Console):
         ).ask(),
     )
 
-    api_port = cast(
-        int,
+    available_subdomains: dict[str, str] = {
+        "🔁 Details of debits/credits across all your accounts (checking, savings, etc.)": f"https://espace-client.credit-agricole.fr{caisses_regionales[regional_branch]}particulier/operations-courantes/telechargement-operations",
+        "📄 Official documents (bank statements, etc.)": f"https://espace-client.credit-agricole.fr{caisses_regionales[regional_branch]}particulier/documents/mes-documents",
+        "💸 Transactions": f"https://espace-client.credit-agricole.fr{caisses_regionales[regional_branch]}particulier/virement/virement-unitaire",
+        "👥 Management of external beneficiaries": f"https://espace-client.credit-agricole.fr{caisses_regionales[regional_branch]}particulier/virement/gestion-beneficiaires",
+    }
+
+    active_subdomains = questionary.checkbox(
+        "Select the optional modules you want to enable (less modules active = faster API)",
+        choices=list(available_subdomains.keys()),
+    ).ask()
+
+    active_subdomains_urls = [
+        available_subdomains[subdomain] for subdomain in active_subdomains
+    ]
+
+    if (
+        "💸 Transactions" in active_subdomains
+        and not "👥 Management of external beneficiaries" in active_subdomains
+    ):
+        active_subdomains_urls.append(
+            available_subdomains["👥 Management of external beneficiaries"]
+        )  # Required for external transactions
+
+    active_subdomains_urls.insert(
+        0,
+        f"https://espace-client.credit-agricole.fr{caisses_regionales[regional_branch]}particulier",
+    )
+
+    api_port = int(
         questionary.text(
             "On which port of your server do you want to make the API available? (make sure the port is available and not blocked by the firewall)",
             validate=validate_integer,
             default="8000",
-        ).ask(),
+        ).ask()
     )
 
-    save_preferences(user_agreement, caisses_regionales[regional_branch], api_port)
+    save_preferences(
+        user_agreement,
+        active_commands,
+        caisses_regionales[regional_branch],
+        active_subdomains_urls,
+        api_port,
+    )

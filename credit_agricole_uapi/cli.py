@@ -118,13 +118,8 @@ def stop_background_server(silent: bool = False):
 
 
 def load_cookies_in_context(context: BrowserContext, page: Page):
-    urls = [
-        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier",
-        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/operations-courantes/telechargement-operations",
-        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/documents/mes-documents",
-        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/virement-unitaire",
-        f"https://espace-client.credit-agricole.fr{load_preferences().get('regional_branch')}particulier/virement/gestion-beneficiaires",
-    ]
+    urls = cast(list[str], load_preferences().get("active_subdomains_urls", []))
+    print(urls)
 
     for i in range(len(urls)):
         _ = page.goto(urls[i])
@@ -296,15 +291,18 @@ def main():
                 f"[bold {CLI_COLOR_STYLE}]\n🎉 Authentification successful 🎉[/bold {CLI_COLOR_STYLE}]"
             )
 
-            port: str | bool | int | None = load_preferences().get("api_port")
-            if not port or not isinstance(port, int):
+            port = cast(int | None, load_preferences().get("api_port"))
+            if not port:
+                console.print(
+                    "[bold red]⚠️  Port is not set. The background server will not be started.[/bold red]"
+                )
                 return
 
             if is_port_in_use(port):
                 console.print(
                     f"[bold red]⚠️  Port {port} is already in use. The background server will not be started.[/bold red]"
                 )
-                sys.exit(1)
+                return
 
             local_ip = get_local_ip()
             console.print(
