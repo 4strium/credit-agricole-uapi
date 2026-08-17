@@ -119,7 +119,6 @@ def stop_background_server(silent: bool = False):
 
 def load_cookies_in_context(context: BrowserContext, page: Page):
     urls = cast(list[str], load_preferences().get("active_subdomains_urls", []))
-    print(urls)
 
     for i in range(len(urls)):
         _ = page.goto(urls[i])

@@ -118,7 +118,7 @@ def call_ca_client_rest_api(
 
         response = client.get(url, headers=headers)
 
-        if response.status_code in (200, 204):
+        if response.status_code in (200, 204, 404):
             if not response.content or not response.content.strip():
                 return {}
 

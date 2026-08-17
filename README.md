@@ -68,10 +68,6 @@ Summary of available endpoints (from `credit_agricole_uapi/api_server.py`):
   - Summary: Get investments / placements data
   - Returns: list of investment product objects
 
-- GET `/api/documents-list` — Documents
-  - Summary: List available documents
-  - Returns: list of documents (metadata)
-
 - GET `/api/transaction-accounts` — Transactions
   - Summary: Get transaction-enabled accounts and known beneficiaries
   - Returns: object with `internal` (accounts) and `external` (beneficiaries)
@@ -86,16 +82,20 @@ Summary of available endpoints (from `credit_agricole_uapi/api_server.py`):
   - Request body: AddBeneficiaryRequest (see schema below)
   - Returns: result message including activation date
 
-- GET `/api/transactions` — Transactions
+- GET `/api/past-transactions` — Transactions
   - Summary: Retrieve the last year of transactions (CSV parsed)
   - Returns: list of accounts with their operations (parsed from CSV)
+
+- GET `/api/documents-list` — Documents
+  - Summary: List available documents
+  - Returns: list of documents (metadata)
 
 - POST `/api/document-by-id` — Documents
   - Summary: Download a document by its ID
   - Request body: DocumentRequest (id)
   - Returns: `{ "url": "<local exports URL>" }` if found, otherwise `{}`
 
-- POST `/api/document-by-type` — Documents
+- POST `/api/documents-by-type` — Documents
   - Summary: Download documents by type (e.g. statements)
   - Request body: DocumentTypeRequest (type: `"Relevés" | "Contrats" | "Autres"`)
   - Returns: list of `{ "<document_label>": "<local exports URL>" }` pairs
@@ -147,7 +147,7 @@ curl -s -X GET "http://127.0.0.1:8000/api/accounts"
 
 - Get transactions (last year, parsed):
 ```bash
-curl -s -X GET "http://127.0.0.1:8000/api/transactions"
+curl -s -X GET "http://127.0.0.1:8000/api/past-transactions"
 ```
 
 - Get transaction-enabled accounts and beneficiaries:
@@ -193,7 +193,7 @@ curl -s -X POST "http://127.0.0.1:8000/api/document-by-id" \
 
 - Download documents by type:
 ```bash
-curl -s -X POST "http://127.0.0.1:8000/api/document-by-type" \
+curl -s -X POST "http://127.0.0.1:8000/api/documents-by-type" \
   -H "Content-Type: application/json" \
   -d '{"type":"Relevés"}'
 ```

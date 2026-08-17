@@ -4,21 +4,29 @@ import re
 import time
 import urllib.parse
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from credit_agricole_uapi.auth import get_local_ip
 from credit_agricole_uapi.fetch import call_ca_client_rest_api, post_ca_client_rest_api
 from credit_agricole_uapi.globals import reboot_lock
+from credit_agricole_uapi.models import (
+    AddBeneficiaryRequest,
+    DocumentDownloadResult,
+    DocumentRequest,
+    DocumentResponse,
+    DocumentsDownloadList,
+    DocumentTypeRequest,
+    GenericAccountResponse,
+    TransactionParams,
+)
 from credit_agricole_uapi.preferences import load_preferences
-
-APPROVED_DOC_TYPES = Literal["Relevés", "Contrats", "Autres"]
 
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
@@ -41,49 +49,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR = Path("data/exports")
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
-
-
-class DocumentRequest(BaseModel):
-    """Request model for downloading a document by its ID."""
-
-    id: str = Field(
-        ...,
-        description="The ID of the document to retrieve",
-        examples=["12345678"],
-    )
-
-
-class DocumentTypeRequest(BaseModel):
-    """Request model for downloading a document by its type."""
-
-    type: APPROVED_DOC_TYPES = Field(
-        ...,
-        description="The type of the document to retrieve",
-        examples=["Relevés"],
-    )
-
-
-class TransactionParams(BaseModel):
-    amount: float = Field(..., description="The amount to transfer")
-    motif: str = Field(..., description="The motif of the transfer")
-    additional_motif: str = Field(
-        ..., description="The additional motif of the transfer"
-    )
-    source_account_iban: str = Field(..., description="The IBAN of the source account")
-    recipient_account_iban: str = Field(
-        ..., description="The IBAN of the recipient account"
-    )
-
-
-class AddBeneficiaryRequest(BaseModel):
-    name: str = Field(
-        ...,
-        description="The name of the beneficiary (as displayed in the bank statement)",
-    )
-    iban: str = Field(..., description="The IBAN of the beneficiary")
-    identifier: str = Field(
-        ..., description="The identifier of the beneficiary", examples=["Dad", "Mom"]
-    )
 
 
 def fix_string(text: str) -> str:
@@ -165,6 +130,9 @@ def bank_product_cleaner(data: list[dict[str, Any]]) -> None:
         element.pop("id_parcours", None)
         element.pop("motif_non_valorisation", None)
         element.pop("solde_valeur", None)
+        element.pop("code_role_intervenant_contrat", None)
+        element.pop("categorie_etablissement", None)
+        element.pop("position", None)
 
 
 def document_attributes_cleaner(data: list[dict[str, Any]]) -> None:
@@ -307,6 +275,7 @@ def _login_subdomain(id: str, subdomain: str) -> str:
     summary="Get accounts data",
     description=("Returns the list of the customer's accounts (cash and securities)."),
     response_description="List of accounts.",
+    response_model=list[GenericAccountResponse],
 )
 def get_accounts_data():
     return regular_get(
@@ -337,6 +306,7 @@ def get_insurance_data():
     summary="Get savings data",
     description=("Returns the list of the customer's savings data."),
     response_description="List of savings.",
+    response_model=list[GenericAccountResponse],
 )
 def get_savings_data():
     return regular_get(
@@ -675,7 +645,7 @@ def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
 
         accounts_number = [contract.get("accountNumber") for contract in contracts]
 
-        today = date.today()
+        today = datetime.now(tz=ZoneInfo("UTC")).date()
 
         # Date d'il y a un an
         # Remplacement de l'année pour gérer correctement la même date 1 ans plus tôt
@@ -720,6 +690,7 @@ def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
     summary="Get documents list",
     description=("Returns the list of the customer's documents."),
     response_description="List of documents.",
+    response_model=list[DocumentResponse],
 )
 def get_documents_list():
     if any(
@@ -741,6 +712,7 @@ def get_documents_list():
     summary="Download document by its ID.",
     description=("Download a document by its ID."),
     response_description="",
+    response_model=DocumentDownloadResult,
 )
 def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
     if any(
@@ -769,6 +741,7 @@ def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
     summary="Download several documents by their type.",
     description=("Download several documents by their type."),
     response_description="",
+    response_model=DocumentsDownloadList,
 )
 def download_document_by_type(
     params: DocumentTypeRequest,
