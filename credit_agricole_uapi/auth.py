@@ -107,3 +107,5 @@ def simulate_human(page: Page) -> None:
             time.sleep(random.uniform(20, 40))
         except PlaywrightTimeoutError:
             break
+
+

@@ -10,8 +10,6 @@ Lightweight local REST API that reuses an authenticated Crédit Agricole web ses
 2. A local FastAPI server runs and forwards requests to Crédit Agricole's private REST endpoints (reusing the authenticated session).
 3. You call the local endpoints to read account data, download documents, create beneficiaries and perform transfers.
 
-Important: no external API key is required to call the local server, but the server itself must be logged in to Crédit Agricole.
-
 ## Running the API server
 
 ### Option 1: via pip (recommended)

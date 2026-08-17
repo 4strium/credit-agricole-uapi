@@ -1,6 +1,8 @@
 import csv
 import io
+import os
 import re
+import secrets
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -10,7 +12,8 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from credit_agricole_uapi.auth import get_local_ip
@@ -28,6 +31,30 @@ from credit_agricole_uapi.models import (
 )
 from credit_agricole_uapi.preferences import load_preferences
 
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_DIR = Path("data/exports")
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+def verify_api_key(api_key: str = Depends(api_key_header)) -> str:
+    expected_key = os.getenv("CA_UAPI_KEY")
+
+    if not expected_key or not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key is missing or invalid",
+        )
+    
+    if not secrets.compare_digest(api_key, expected_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key is missing or invalid",
+        )
+        
+    return api_key
+
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
     description=(
@@ -42,14 +69,9 @@ app = FastAPI(
     ),
     version="0.1.1",
     contact={"name": "credit-agricole-uapi"},
+    dependencies=[Depends(verify_api_key)]
 )
-
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-EXPORTS_DIR = Path("data/exports")
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
-
 
 def fix_string(text: str) -> str:
     try:
@@ -267,6 +289,9 @@ def _login_subdomain(id: str, subdomain: str) -> str:
     )["contextId"]
 
     return context_id
+
+
+
 
 
 @app.get(

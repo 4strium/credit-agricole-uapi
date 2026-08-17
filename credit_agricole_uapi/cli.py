@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -133,7 +134,9 @@ def load_cookies_in_context(context: BrowserContext, page: Page):
     _ = context.storage_state(path=auth_path)
 
 
-def run_background_server(port: int, account_id: int, password: int):
+def run_background_server(port: int):
+    account_id = int(cast(str, os.getenv("CA_UAPI_ACCOUNT_ID")))
+    password = int(cast(str, os.getenv("CA_UAPI_ACCOUNT_PSW")))
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
 
@@ -286,10 +289,6 @@ def main():
 
             _ = get_accounts_data()
 
-            console.print(
-                f"[bold {CLI_COLOR_STYLE}]\n🎉 Authentification successful 🎉[/bold {CLI_COLOR_STYLE}]"
-            )
-
             port = cast(int | None, load_preferences().get("api_port"))
             if not port:
                 console.print(
@@ -302,6 +301,23 @@ def main():
                     f"[bold red]⚠️  Port {port} is already in use. The background server will not be started.[/bold red]"
                 )
                 return
+
+            console.print(
+                f"[bold {CLI_COLOR_STYLE}]🎉 Authentification successful 🎉[/bold {CLI_COLOR_STYLE}]"
+            )
+
+            # Generate API key
+            api_key = secrets.token_urlsafe(32)
+
+            console.print(
+                f"[bold {CLI_COLOR_STYLE}]\n🔑 API key:[/bold {CLI_COLOR_STYLE}] [code]{api_key}[/code] [italic](make sure to save it, it will not be shown again)[/italic]"
+            )
+
+            # Put credentials in environment
+            srv_env = os.environ.copy()
+            srv_env["CA_UAPI_KEY"] = str(api_key)
+            srv_env["CA_UAPI_ACCOUNT_ID"] = str(account_id)
+            srv_env["CA_UAPI_ACCOUNT_PSW"] = str(password)
 
             local_ip = get_local_ip()
             console.print(
@@ -325,21 +341,18 @@ def main():
                         "--background",
                         "--port",
                         str(port),
-                        "--account-id",
-                        str(account_id),
-                        "--password",
-                        str(password),
                     ],
                     stdout=logfile,
                     stderr=logfile,
                     stdin=subprocess.DEVNULL,
                     start_new_session=True,
+                    env=srv_env,
                 )
                 _ = server_pid_path.write_text(str(process.pid))
 
             time.sleep(2)
             console.print(
-                f'[bold {CLI_COLOR_STYLE}]\n😉 Typing [code]curl -s -X GET "http://127.0.0.1:{port}/api/accounts"[/code] is a good way to test the API.[/bold {CLI_COLOR_STYLE}]'
+                f'[bold {CLI_COLOR_STYLE}]\n😉 Typing [code]curl -s -X GET "http://127.0.0.1:{port}/api/accounts" -H "X-API-Key: <api_key>"[/code] is a good way to test the API.[/bold {CLI_COLOR_STYLE}]'
             )
             console.print(
                 f"[bold {CLI_COLOR_STYLE}]\n📚 All endpoints are documented at [link=http://{local_ip}:{port}/docs]http://{local_ip}:{port}/docs[/link].\n[/bold {CLI_COLOR_STYLE}]"
@@ -385,10 +398,6 @@ def run():
         "--port", type=int, default=8000, help="Listening port for the API"
     )
     _ = parser.add_argument(
-        "--account-id", type=int, help="Account ID for authentication"
-    )
-    _ = parser.add_argument("--password", type=int, help="Password for authentication")
-    _ = parser.add_argument(
         "--stop",
         action="store_true",
         help="Stop the background server started previously",
@@ -397,7 +406,7 @@ def run():
     if args.stop:
         stop_background_server()
     elif "--background" in sys.argv:
-        run_background_server(args.port, args.account_id, args.password)
+        run_background_server(args.port)
     else:
         main()
 
