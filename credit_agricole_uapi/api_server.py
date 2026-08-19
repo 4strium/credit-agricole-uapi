@@ -38,6 +38,7 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
+
 def verify_api_key(api_key: str = Depends(api_key_header)) -> str:
     expected_key = os.getenv("CA_UAPI_KEY")
 
@@ -46,14 +47,15 @@ def verify_api_key(api_key: str = Depends(api_key_header)) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key is missing or invalid",
         )
-    
+
     if not secrets.compare_digest(api_key, expected_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key is missing or invalid",
         )
-        
+
     return api_key
+
 
 app = FastAPI(
     title="Crédit Agricole Unofficial API",
@@ -69,9 +71,10 @@ app = FastAPI(
     ),
     version="0.1.1",
     contact={"name": "credit-agricole-uapi"},
-    dependencies=[Depends(verify_api_key)]
+    dependencies=[Depends(verify_api_key)],
 )
 app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
+
 
 def fix_string(text: str) -> str:
     try:
@@ -289,9 +292,6 @@ def _login_subdomain(id: str, subdomain: str) -> str:
     )["contextId"]
 
     return context_id
-
-
-
 
 
 @app.get(

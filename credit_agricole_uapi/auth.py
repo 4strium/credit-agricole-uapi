@@ -101,11 +101,8 @@ def simulate_human(page: Page) -> None:
             target_x = random.randint(100, width - 100)
             target_y = random.randint(100, height - 100)
 
-            # Mouvement de souris en version synchrone
             page.mouse.move(target_x, target_y, steps=random.randint(10, 20))
 
             time.sleep(random.uniform(20, 40))
         except PlaywrightTimeoutError:
             break
-
-
