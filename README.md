@@ -152,17 +152,17 @@ Replace example values with your own. These assume the server runs on `http://12
 
 - List accounts:
 ```bash
-curl -s -X GET "http://127.0.0.1:8000/api/accounts -H "X-API-Key: <api_key>""
+curl -s -X GET "http://127.0.0.1:8000/api/accounts" -H "X-API-Key: <api_key>"
 ```
 
 - Get transactions (last year, parsed):
 ```bash
-curl -s -X GET "http://127.0.0.1:8000/api/past-transactions -H "X-API-Key: <api_key>""
+curl -s -X GET "http://127.0.0.1:8000/api/past-transactions" -H "X-API-Key: <api_key>"
 ```
 
 - Get transaction-enabled accounts and beneficiaries:
 ```bash
-curl -s -X GET "http://127.0.0.1:8000/api/transaction-accounts -H "X-API-Key: <api_key>""
+curl -s -X GET "http://127.0.0.1:8000/api/transaction-accounts" -H "X-API-Key: <api_key>"
 ```
 
 - Make a transfer:

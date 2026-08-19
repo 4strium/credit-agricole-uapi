@@ -102,8 +102,6 @@ def stop_background_server(silent: bool = False):
     pid = int(server_pid_path.read_text().strip())
 
     try:
-        os.killpg(pid, signal.SIGINT)
-        time.sleep(0.5)
         os.kill(pid, signal.SIGTERM)
         if not silent:
             console.print(
