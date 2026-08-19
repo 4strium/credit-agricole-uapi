@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
+from credit_agricole_uapi import __version__
 from credit_agricole_uapi.auth import get_local_ip
 from credit_agricole_uapi.fetch import call_ca_client_rest_api, post_ca_client_rest_api
 from credit_agricole_uapi.globals import reboot_lock
@@ -69,7 +70,7 @@ app = FastAPI(
         "startup). No API key is needed to call this local server, but the "
         "server itself must be logged in to Crédit Agricole to answer requests."
     ),
-    version="0.1.1",
+    version=__version__,
     contact={"name": "credit-agricole-uapi"},
     dependencies=[Depends(verify_api_key)],
 )
