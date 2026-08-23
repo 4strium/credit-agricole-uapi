@@ -188,7 +188,8 @@ def global_keep_alive(
         """)
 
         context.clear_cookies()
-        _ = page.reload()
+        urls = cast(list[str], load_preferences().get("active_subdomains_urls", []))
+        _ = page.goto(urls[0])
         ca_login(page, account_id, password, page.url)
         load_cookies_in_context(context, page)
 
