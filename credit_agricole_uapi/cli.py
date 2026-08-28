@@ -10,7 +10,9 @@ import time
 from pathlib import Path
 from typing import cast
 
+import pytest
 import questionary
+from fastapi import HTTPException
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -286,7 +288,20 @@ def main():
                 init_client(context.cookies())
                 browser.close()
 
-            _ = get_accounts_data()
+            with pytest.raises(HTTPException) as exc_info:
+                _ = get_accounts_data()
+
+            if exc_info.value.status_code == 401:
+                console.print(
+                    Panel(
+                        f"[bold white]Authentication error: {exc_info.value}[/bold white]\n",
+                        title="[bold white on red] ERROR [/bold white on red]",
+                        border_style="red",
+                        expand=False,
+                    )
+                )
+                context.close()
+                return
 
             port = cast(int | None, load_preferences().get("api_port"))
             if not port:

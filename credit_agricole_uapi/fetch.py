@@ -1,5 +1,4 @@
 import json
-import sys
 import threading
 import time
 import uuid
@@ -99,7 +98,7 @@ def _current_xsrf_token(client: httpx.Client) -> str:
 
 def call_ca_client_rest_api(
     url: str, extra_headers: dict[str, str] | None = None
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | int:
     """
     Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine.
     """
@@ -129,19 +128,16 @@ def call_ca_client_rest_api(
                     return {"data": response.content}
                 except AttributeError:
                     return {}
-        elif response.status_code == 401:
-            print(f"Échec ({response.status_code}) : {response.text}")
-            sys.exit(1)
         else:
-            print(f"Échec ({response.status_code}) : {response.text}")
-            return None
+            print(f"Error ({response.status_code}) - GET @ {url} : {response.text}")
+            return response.status_code
 
 
 def post_ca_client_rest_api(
     url: str,
     json_data: dict[str, Any] | list[Any] | None = None,
     extra_headers: dict[str, str] | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | int:
     """
     Appelle l'API REST du Crédit Agricole via un client HTTP dédié par domaine (Méthode POST).
     """
@@ -171,22 +167,21 @@ def post_ca_client_rest_api(
                     return {"data": response.content}
                 except AttributeError:
                     return {}
-        elif response.status_code == 401:
-            print(f"Échec ({response.status_code}) : {response.text}")
-            sys.exit(1)
         else:
-            print(f"Échec ({response.status_code}) : {response.text}")
-            return None
+            print(
+                f"Error ({response.status_code}) - Post @ {url} with {json_data} : {response.text}"
+            )
+            return response.status_code
 
 
 def keep_alive_sso():
     for _ in range(19):
         time.sleep(180)
-        if (
+        if isinstance(
             call_ca_client_rest_api(
                 "https://client.ca-connect.credit-agricole.fr/keepalive"
-            )
-            is None
+            ),
+            int,
         ):
             break
 
@@ -194,30 +189,30 @@ def keep_alive_sso():
 def keep_alive_bff():
     time.sleep(30)
     for _ in range(7):
-        if (
+        if isinstance(
             call_ca_client_rest_api(
                 "https://espace-client.credit-agricole.fr/bff/api/security/ping",
                 {"correlationId": str(uuid.uuid4())},
-            )
-            is None
+            ),
+            int,
         ):
             break
         time.sleep(240)
-        if (
+        if isinstance(
             call_ca_client_rest_api(
                 "https://espace-client.credit-agricole.fr/bff/api/security/ping",
                 {"correlationId": str(uuid.uuid4())},
-            )
-            is None
+            ),
+            int,
         ):
             return
         time.sleep(10)
-        if (
+        if isinstance(
             call_ca_client_rest_api(
                 "https://espace-client.credit-agricole.fr/bff/api/security/refresh",
                 {"correlationId": str(uuid.uuid4())},
-            )
-            is None
+            ),
+            int,
         ):
             return
         time.sleep(229)

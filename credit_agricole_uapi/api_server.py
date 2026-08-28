@@ -3,6 +3,7 @@ import io
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -196,8 +197,10 @@ def regular_get(
     reboot_lock.disable_reboot()
 
     data = call_ca_client_rest_api(endpoint, extra_headers)
-    if data is None:
-        raise HTTPException(status_code=500, detail="Failed to call CA client REST API")
+    if isinstance(data, int):
+        raise HTTPException(
+            status_code=data, detail="Failed to call CA client REST API"
+        )
 
     if data == {}:
         return []
@@ -222,8 +225,10 @@ def regular_post(
     reboot_lock.disable_reboot()
 
     data = post_ca_client_rest_api(endpoint, json_data, extra_headers)
-    if data is None:
-        raise HTTPException(status_code=500, detail="Failed to call CA client REST API")
+    if isinstance(data, int):
+        raise HTTPException(
+            status_code=data, detail="Failed to call CA client REST API"
+        )
 
     if data == {}:
         return []
@@ -272,6 +277,70 @@ def document_fetcher(document: dict[str, Any]) -> str:
         return f"http://{get_local_ip()}:{load_preferences().get('api_port')}/exports/{document['libelleTypeDocument']}/{document['id']}.pdf"
 
     return ""
+
+
+def conclude_transaction(
+    auth_method: str,
+    auth_by_factor_id: dict[str, str],
+    context_id: str,
+    transfer_flow_id: str,
+    source_account_data: dict[str, str],
+    holder: str,
+    params: TransactionParams,
+    external_account: dict[str, str],
+    vop_entity_id: str,
+):
+    fst_ask_time = time.time()
+    while True:
+        if time.time() - fst_ask_time > 60:
+            raise HTTPException(
+                status_code=504,
+                detail="The authentication request via your phone has expired.",
+            )
+
+        status_code = cast(
+            int,
+            regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/{auth_method}/validation",
+                specific_key="status",
+                extra_headers=auth_by_factor_id,
+            ),
+        )
+
+        if status_code == 200:
+            break
+
+        time.sleep(4)
+
+    _ = regular_post(
+        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
+        {
+            "check": {
+                "transfer_flow_id": transfer_flow_id,
+                "source_account_number": params.source_account_iban,
+                "source_bic": source_account_data.get("bic_code"),
+                "source_name": holder,
+                "date": int(time.time() * 1000),
+                "amount": params.amount,
+                "currency": "EUR",
+                "recipient_account_number": params.recipient_account_iban,
+                "recipient_name": external_account.get("name"),
+                "recipient_bic": external_account.get("bic_code"),
+                "remittance_information": params.motif,
+                "additional_remittance_information": params.additional_motif,
+            },
+            "vop_entity_id": vop_entity_id,
+        },
+    )
+
+    _order_id = cast(
+        str,
+        regular_post(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/send-ip",
+            {"virementId": transfer_flow_id},
+            specific_key="order_id",
+        ),
+    )
 
 
 def _login_subdomain(id: str, subdomain: str) -> str:
@@ -441,6 +510,7 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
         )
 
         transfer_flow_id = cast(str, transfer_infos["transfer_flow_id"])
+        holder = cast(str, transfer_infos["my_accounts"][0]["holder"])
         internal_accounts = cast(
             list[dict[str, Any]], transfer_infos["my_accounts"][0]["accounts"]
         )
@@ -454,8 +524,11 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
 
         source_account_data = {}
         recipient_account_data = {}
+        cash_account_iban = ""
 
         for internal_account in internal_accounts:
+            if internal_account["is_saving"] == False and cash_account_iban == "":
+                cash_account_iban = internal_account["iban"]
             if internal_account["iban"] == params.source_account_iban:
                 source_account_data = internal_account
             elif internal_account["iban"] == params.recipient_account_iban:
@@ -470,35 +543,170 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
                 status_code=404, detail="Source or recipient account not found"
             )
 
-        transaction_package = {
-            "virement": {
-                "transfer_flow_id": transfer_flow_id,
-                "source_account": source_account_data,
-                "recipient_account": recipient_account_data,
-                "date": time.time_ns() // 1_000_000,
-                "amount": str(round(params.amount, 2)),
-                "motif": params.motif,
-                "additional_motif": params.additional_motif,
-                "transfer_frequency_code": "U",
-                "end_due_date": 0,
+        if (
+            source_account_data.get("is_saving") == True
+            and recipient_account_data.get("external") is not None
+        ):
+            intermediate_p1_params = TransactionParams(
+                amount=params.amount,
+                source_account_iban=params.source_account_iban,
+                recipient_account_iban=cash_account_iban,
+                motif=params.motif,
+                additional_motif=params.additional_motif,
+            )
+            _ = carry_out_transaction(intermediate_p1_params)
+            time.sleep(5)
+            intermediate_p2_params = TransactionParams(
+                amount=params.amount,
+                source_account_iban=cash_account_iban,
+                recipient_account_iban=params.recipient_account_iban,
+                motif=params.motif,
+                additional_motif=params.additional_motif,
+            )
+            _ = carry_out_transaction(intermediate_p2_params)
+            return {"Result": "✅ Transaction carried out successfully"}
+
+        if recipient_account_data and (
+            external_account := recipient_account_data.get("external")
+        ):
+            vop_entity_id = cast(
+                str,
+                regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/vop",
+                    {
+                        "channel_from": "IN",
+                        "type_of_use": "VIRT",
+                        "iban_payee": params.recipient_account_iban,
+                        "bic_entity": external_account.get("bic_code"),
+                        "identifier_value": external_account.get("name"),
+                    },
+                    specific_key="vop_entity_id",
+                ),
+            )
+
+            _ = regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/control-ip",
+                {
+                    "fraisIp": {
+                        "transfer_flow_id": transfer_flow_id,
+                        "source_account_number": params.source_account_iban,
+                        "source_bic": source_account_data.get("bic_code"),
+                        "source_name": holder,
+                        "date": 0,
+                        "amount": params.amount,
+                        "currency": "EUR",
+                        "recipient_account_number": params.recipient_account_iban,
+                        "recipient_name": external_account.get("name"),
+                        "recipient_bic": external_account.get("bic_code"),
+                        "remittance_information": params.motif,
+                        "additional_remittance_information": params.additional_motif,
+                        "transfer_frequency_code": "",
+                    }
+                },
+            )
+
+            _ = regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
+                {
+                    "check": {
+                        "transfer_flow_id": transfer_flow_id,
+                        "source_account_number": params.source_account_iban,
+                        "source_bic": source_account_data.get("bic_code"),
+                        "source_name": holder,
+                        "date": int(time.time() * 1000),
+                        "amount": params.amount,
+                        "currency": "EUR",
+                        "recipient_account_number": params.recipient_account_iban,
+                        "recipient_name": external_account.get("name"),
+                        "recipient_bic": external_account.get("bic_code"),
+                        "remittance_information": params.motif,
+                        "additional_remittance_information": params.additional_motif,
+                    },
+                    "vop_entity_id": vop_entity_id,
+                },
+            )
+
+            try_send_ip = post_ca_client_rest_api(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/send-ip",
+                {"virementId": transfer_flow_id},
+            )
+
+            if try_send_ip == 401:
+                auth_by_factor_id = cast(
+                    dict[str, str],
+                    regular_post(
+                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/settings",  # Trigger SecuriPass
+                        {"authUsage": "U031"},
+                    ),
+                )
+
+                headers = auth_by_factor_id | {
+                    "Referer": f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}fevir/authent-forte"
+                }
+
+                auth_method = cast(
+                    str,
+                    regular_get(
+                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/active",
+                        specific_key="method",
+                        extra_headers=headers,
+                    ),
+                )
+
+                _ = regular_get(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/D010/request",
+                    extra_headers=headers,
+                )
+
+                threading.Thread(
+                    target=conclude_transaction,
+                    args=(
+                        auth_method,
+                        auth_by_factor_id,
+                        context_id,
+                        transfer_flow_id,
+                        source_account_data,
+                        holder,
+                        params,
+                        external_account,
+                        vop_entity_id,
+                    ),
+                ).start()
+                return {
+                    "✅ Transaction initiated": "Confirm using your Credit Agricole smartphone app to finalize the transaction."
+                }
+            else:
+                raise HTTPException(status_code=500, detail="❌ Transaction failed")
+        else:
+            transaction_package = {
+                "virement": {
+                    "transfer_flow_id": transfer_flow_id,
+                    "source_account": source_account_data,
+                    "recipient_account": recipient_account_data,
+                    "date": time.time_ns() // 1_000_000,
+                    "amount": str(round(params.amount, 2)),
+                    "motif": params.motif,
+                    "additional_motif": params.additional_motif,
+                    "transfer_frequency_code": "U",
+                    "end_due_date": 0,
+                }
             }
-        }
 
-        confirm_transfer_flow_id = cast(
-            str,
-            regular_post(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
-                transaction_package,
-                "transfer_flow_id",
-            ),
-        )
+            confirm_transfer_flow_id = cast(
+                str,
+                regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
+                    transaction_package,
+                    "transfer_flow_id",
+                ),
+            )
 
-        _ = regular_post(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
-            {"transfer_flow_id": confirm_transfer_flow_id},
-        )
+            _ = regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
+                {"transfer_flow_id": confirm_transfer_flow_id},
+            )
 
-        return {"Result": "✅ Transaction carried out successfully"}
+            return {"Result": "✅ Transaction carried out successfully"}
     else:
         return {"error": "❌ Transaction submodule not enabled"}
 
@@ -609,7 +817,7 @@ def add_beneficiary(params: AddBeneficiaryRequest) -> dict[str, str]:
             status_code = cast(
                 int,
                 regular_post(
-                    f"https://beneficiaire-npc-unitaire.credit-agricole.fr/{load_preferences().get('regional_branch')}/bffgbnf/customer/authentication/factors/{auth_method}/validation",
+                    f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/customer/authentication/factors/{auth_method}/validation",
                     specific_key="status",
                     extra_headers=auth_by_factor_id,
                 ),
