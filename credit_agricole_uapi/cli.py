@@ -19,7 +19,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from rich.console import Console
 from rich.panel import Panel
 
-from credit_agricole_uapi.api_server import get_accounts_data, start_api_server
+from credit_agricole_uapi.api_server import start_api_server
 from credit_agricole_uapi.auth import (
     ca_login,
     get_local_ip,
@@ -36,6 +36,7 @@ from credit_agricole_uapi.preferences import (
     validate_6digit_integer,
     validate_integer,
 )
+from credit_agricole_uapi.user_data.accounts_synthesis import get_accounts_data
 
 APP_LOGO = """
  ██████ ██████  ███████ ██████  ██ ████████      █████   ██████  ██████  ██  ██████  ██████  ██      ███████     ██    ██  █████  ██████  ██
