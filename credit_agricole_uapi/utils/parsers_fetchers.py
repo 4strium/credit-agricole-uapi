@@ -5,8 +5,11 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
+
 from credit_agricole_uapi.api_server import clean_libelle, regular_get, to_float
 from credit_agricole_uapi.auth import get_local_ip
+from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 
 
@@ -72,10 +75,16 @@ def document_fetcher(document: dict[str, Any]) -> str:
                 )
             else:
                 fixed_libelle = urllib.parse.quote(document["libelle"])
-            pdf_bytes = regular_get(
-                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{fixed_libelle}?document_id={urllib.parse.quote(document['id'])}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
-                "data",
-            )
+            try:
+                pdf_bytes = regular_get(
+                    f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/download_document/{fixed_libelle}?document_id={urllib.parse.quote(document['id'])}&key_id={document['key']}&origine={document['origine']}&format={document['formatDocument']}&categorie_id={document['idCategorie']}",
+                    "data",
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
 
             if isinstance(pdf_bytes, bytes):
                 with open(file_path, "wb") as fichier:

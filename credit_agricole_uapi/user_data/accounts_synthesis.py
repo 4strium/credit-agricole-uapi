@@ -1,4 +1,7 @@
+from fastapi import HTTPException
+
 from credit_agricole_uapi.api_server import app, regular_get
+from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.utils.cleaners import bank_product_cleaner
 from credit_agricole_uapi.utils.models import GenericAccountResponse
 
@@ -12,11 +15,17 @@ from credit_agricole_uapi.utils.models import GenericAccountResponse
     response_model=list[GenericAccountResponse],
 )
 def get_accounts_data():
-    return regular_get(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES",
-        "COMPTES",
-        bank_product_cleaner,
-    )
+    try:
+        return regular_get(
+            "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES",
+            "COMPTES",
+            bank_product_cleaner,
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
 
 @app.get(
@@ -27,11 +36,17 @@ def get_accounts_data():
     response_description="List of insurance.",
 )
 def get_insurance_data():
-    return regular_get(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES",
-        "ASSURANCES",
-        bank_product_cleaner,
-    )
+    try:
+        return regular_get(
+            "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=ASSURANCES",
+            "ASSURANCES",
+            bank_product_cleaner,
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
 
 @app.get(
@@ -43,11 +58,17 @@ def get_insurance_data():
     response_model=list[GenericAccountResponse],
 )
 def get_savings_data():
-    return regular_get(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE",
-        "EPARGNE",
-        bank_product_cleaner,
-    )
+    try:
+        return regular_get(
+            "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=EPARGNE",
+            "EPARGNE",
+            bank_product_cleaner,
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
 
 @app.get(
@@ -58,11 +79,17 @@ def get_savings_data():
     response_description="List of loans.",
 )
 def get_loans_data():
-    return regular_get(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS",
-        "CREDITS",
-        bank_product_cleaner,
-    )
+    try:
+        return regular_get(
+            "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=CREDITS",
+            "CREDITS",
+            bank_product_cleaner,
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
 
 @app.get(
@@ -73,8 +100,14 @@ def get_loans_data():
     response_description="List of investments.",
 )
 def get_investments_data():
-    return regular_get(
-        "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS",
-        "PLACEMENTS",
-        bank_product_cleaner,
-    )
+    try:
+        return regular_get(
+            "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=PLACEMENTS",
+            "PLACEMENTS",
+            bank_product_cleaner,
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )

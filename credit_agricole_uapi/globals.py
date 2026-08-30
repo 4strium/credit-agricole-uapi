@@ -3,6 +3,12 @@ import time
 from enum import Enum, auto
 
 
+class ApiError(Exception):
+    def __init__(self, code: int):
+        self.code: int = code
+        super().__init__(f"API request error - code : {code}")
+
+
 class RebootState(Enum):
     AVAILABLE = auto()
     UNAVAILABLE = auto()

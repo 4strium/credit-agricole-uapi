@@ -10,16 +10,14 @@ import time
 from pathlib import Path
 from typing import cast
 
-import pytest
 import questionary
-from fastapi import HTTPException
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from rich.console import Console
 from rich.panel import Panel
 
-from credit_agricole_uapi.api_server import start_api_server
+from credit_agricole_uapi.api_server import regular_get, start_api_server
 from credit_agricole_uapi.auth import (
     ca_login,
     get_local_ip,
@@ -27,7 +25,7 @@ from credit_agricole_uapi.auth import (
     simulate_human,
 )
 from credit_agricole_uapi.fetch import init_client, keep_alive_bff, keep_alive_sso
-from credit_agricole_uapi.globals import reboot_lock
+from credit_agricole_uapi.globals import ApiError, reboot_lock
 from credit_agricole_uapi.preferences import (
     CLI_COLOR_STYLE,
     ask_preferences,
@@ -36,7 +34,6 @@ from credit_agricole_uapi.preferences import (
     validate_6digit_integer,
     validate_integer,
 )
-from credit_agricole_uapi.user_data.accounts_synthesis import get_accounts_data
 
 APP_LOGO = """
  ██████ ██████  ███████ ██████  ██ ████████      █████   ██████  ██████  ██  ██████  ██████  ██      ███████     ██    ██  █████  ██████  ██
@@ -289,13 +286,14 @@ def main():
                 init_client(context.cookies())
                 browser.close()
 
-            with pytest.raises(HTTPException) as exc_info:
-                _ = get_accounts_data()
-
-            if exc_info.value.status_code == 401:
+            try:
+                _ = regular_get(
+                    "https://espace-client.credit-agricole.fr/bff/api/synthesis/contract/data?code_grande_famille=COMPTES"
+                )
+            except ApiError as e:
                 console.print(
                     Panel(
-                        f"[bold white]Authentication error: {exc_info.value}[/bold white]\n",
+                        f"[bold white]Authentication error: {e.code}[/bold white]\n",
                         title="[bold white on red] ERROR [/bold white on red]",
                         border_style="red",
                         expand=False,

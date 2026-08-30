@@ -1,6 +1,9 @@
 from typing import Any, cast
 
+from fastapi import HTTPException
+
 from credit_agricole_uapi.api_server import app, regular_get
+from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 from credit_agricole_uapi.utils.cleaners import document_attributes_cleaner
 from credit_agricole_uapi.utils.models import (
@@ -26,11 +29,17 @@ def get_documents_list():
         url.endswith("mes-documents")
         for url in cast(str, load_preferences().get("active_subdomains_urls", []))
     ):
-        return regular_get(
-            f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-            "listeDocument",
-            document_attributes_cleaner,
-        )
+        try:
+            return regular_get(
+                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+                "listeDocument",
+                document_attributes_cleaner,
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
     else:
         return {"error": "❌ Documents submodule not enabled"}
 
@@ -48,13 +57,19 @@ def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
         url.endswith("mes-documents")
         for url in cast(str, load_preferences().get("active_subdomains_urls", []))
     ):
-        documents_list = cast(
-            list[dict[str, Any]],
-            regular_get(
-                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-                "listeDocument",
-            ),
-        )
+        try:
+            documents_list = cast(
+                list[dict[str, Any]],
+                regular_get(
+                    f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+                    "listeDocument",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         for document in documents_list:
             if document["id"] == params.id:
@@ -79,13 +94,19 @@ def download_document_by_type(
         url.endswith("mes-documents")
         for url in cast(str, load_preferences().get("active_subdomains_urls", []))
     ):
-        documents_list = cast(
-            list[dict[str, Any]],
-            regular_get(
-                f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
-                "listeDocument",
-            ),
-        )
+        try:
+            documents_list = cast(
+                list[dict[str, Any]],
+                regular_get(
+                    f"https://hubdocumentaire.credit-agricole.fr{load_preferences().get('regional_branch')}bff/api/hub/documents?texte=",
+                    "listeDocument",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         result: list[dict[str, Any]] = []
 

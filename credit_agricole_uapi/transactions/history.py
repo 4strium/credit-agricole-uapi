@@ -2,12 +2,15 @@ from datetime import datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
+
 from credit_agricole_uapi.api_server import (
     app,
     login_subdomain,
     regular_get,
     regular_post,
 )
+from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 from credit_agricole_uapi.utils.parsers_fetchers import parse_releve
 
@@ -29,13 +32,19 @@ def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
             f"https://telechargement-operations.credit-agricole.fr{load_preferences().get('regional_branch')}bff",
         )
 
-        contracts = cast(
-            list[dict[str, str]],
-            regular_get(
-                f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/contrats?contextId={context_id}",
-                specific_key="contractElements",
-            ),
-        )
+        try:
+            contracts = cast(
+                list[dict[str, str]],
+                regular_get(
+                    f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/contrats?contextId={context_id}",
+                    specific_key="contractElements",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         accounts_number = [contract.get("accountNumber") for contract in contracts]
 
@@ -62,14 +71,20 @@ def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
             "showValueDate": False,
         }
 
-        data = cast(
-            bytes,
-            regular_post(
-                f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/generer_document?contextId={context_id}",
-                payload,
-                specific_key="data",
-            ),
-        )
+        try:
+            data = cast(
+                bytes,
+                regular_post(
+                    f"https://telechargement-operations.credit-agricole.fr/ca-finistere/bff/generer_document?contextId={context_id}",
+                    payload,
+                    specific_key="data",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         parsed_data = parse_releve(data)
 

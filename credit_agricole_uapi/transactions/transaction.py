@@ -11,6 +11,7 @@ from credit_agricole_uapi.api_server import (
     regular_post,
 )
 from credit_agricole_uapi.fetch import post_ca_client_rest_api
+from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 from credit_agricole_uapi.utils.cleaners import beneficiary_cleaner
 from credit_agricole_uapi.utils.data_packet import gen_transfer_packet
@@ -36,49 +37,67 @@ def conclude_transaction(
                 detail="The authentication request via your phone has expired.",
             )
 
-        status_code = cast(
-            int,
-            regular_post(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/{auth_method}/validation",
-                specific_key="status",
-                extra_headers=auth_by_factor_id,
-            ),
-        )
+        try:
+            status_code = cast(
+                int,
+                regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/{auth_method}/validation",
+                    specific_key="status",
+                    extra_headers=auth_by_factor_id,
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         if status_code == 200:
             break
 
         time.sleep(4)
 
-    _ = regular_post(
-        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
-        {
-            "check": {
-                "transfer_flow_id": transfer_flow_id,
-                "source_account_number": params.source_account_iban,
-                "source_bic": source_account_data.get("bic_code"),
-                "source_name": holder,
-                "date": int(time.time() * 1000),
-                "amount": params.amount,
-                "currency": "EUR",
-                "recipient_account_number": params.recipient_account_iban,
-                "recipient_name": external_account.get("name"),
-                "recipient_bic": external_account.get("bic_code"),
-                "remittance_information": params.motif,
-                "additional_remittance_information": params.additional_motif,
+    try:
+        _ = regular_post(
+            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
+            {
+                "check": {
+                    "transfer_flow_id": transfer_flow_id,
+                    "source_account_number": params.source_account_iban,
+                    "source_bic": source_account_data.get("bic_code"),
+                    "source_name": holder,
+                    "date": int(time.time() * 1000),
+                    "amount": params.amount,
+                    "currency": "EUR",
+                    "recipient_account_number": params.recipient_account_iban,
+                    "recipient_name": external_account.get("name"),
+                    "recipient_bic": external_account.get("bic_code"),
+                    "remittance_information": params.motif,
+                    "additional_remittance_information": params.additional_motif,
+                },
+                "vop_entity_id": vop_entity_id,
             },
-            "vop_entity_id": vop_entity_id,
-        },
-    )
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
-    _order_id = cast(
-        str,
-        regular_post(
-            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/send-ip",
-            {"virementId": transfer_flow_id},
-            specific_key="order_id",
-        ),
-    )
+    try:
+        _order_id = cast(
+            str,
+            regular_post(
+                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/send-ip",
+                {"virementId": transfer_flow_id},
+                specific_key="order_id",
+            ),
+        )
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
 
 @app.get(
@@ -100,19 +119,31 @@ def get_transaction_enabled_accounts() -> dict[str, Any]:
 
         res: dict[str, Any] = {}
 
-        res["internal"] = cast(
-            list[dict[str, Any]],
-            regular_get(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
-                "my_accounts",
-            ),
-        )[0]["accounts"]
+        try:
+            res["internal"] = cast(
+                list[dict[str, Any]],
+                regular_get(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+                    "my_accounts",
+                ),
+            )[0]["accounts"]
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
-        res["external"] = regular_get(
-            f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
-            "beneficiaries",
-            beneficiary_cleaner,
-        )
+        try:
+            res["external"] = regular_get(
+                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+                "beneficiaries",
+                beneficiary_cleaner,
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         return res
     else:
@@ -142,25 +173,37 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
             f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir",
         )
 
-        transfer_infos = cast(
-            dict[str, Any],
-            regular_get(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
-            ),
-        )
+        try:
+            transfer_infos = cast(
+                dict[str, Any],
+                regular_get(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/comptes",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         transfer_flow_id = cast(str, transfer_infos["transfer_flow_id"])
         holder = cast(str, transfer_infos["my_accounts"][0]["holder"])
         internal_accounts = cast(
             list[dict[str, Any]], transfer_infos["my_accounts"][0]["accounts"]
         )
-        external_accounts = cast(
-            list[dict[str, Any]],
-            regular_get(
-                f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
-                "beneficiaries",
-            ),
-        )
+        try:
+            external_accounts = cast(
+                list[dict[str, Any]],
+                regular_get(
+                    f"https://beneficiaire-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffgbnf/beneficiaries",
+                    "beneficiaries",
+                ),
+            )
+        except ApiError as e:
+            raise HTTPException(
+                status_code=e.code,
+                detail="Failed to call Credit Agricole API, please try again later",
+            )
 
         source_account_data = {}
         recipient_account_data = {}
@@ -209,58 +252,76 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
         if recipient_account_data and (
             external_account := recipient_account_data.get("external")
         ):
-            vop_entity_id = cast(
-                str,
-                regular_post(
-                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/vop",
-                    {
-                        "channel_from": "IN",
-                        "type_of_use": "VIRT",
-                        "iban_payee": params.recipient_account_iban,
-                        "bic_entity": external_account.get("bic_code"),
-                        "identifier_value": external_account.get("name"),
-                    },
-                    specific_key="vop_entity_id",
-                ),
-            )
-
-            _ = regular_post(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/control-ip",
-                {
-                    "fraisIp": gen_transfer_packet(
-                        transfer_flow_id,
-                        params.source_account_iban,
-                        cast(str, source_account_data.get("bic_code")),
-                        holder,
-                        params.amount,
-                        params.recipient_account_iban,
-                        cast(str, external_account.get("name")),
-                        cast(str, external_account.get("bic_code")),
-                        params.motif,
-                        params.additional_motif,
-                        "",
-                    )
-                },
-            )
-
-            _ = regular_post(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
-                {
-                    "check": gen_transfer_packet(
-                        transfer_flow_id,
-                        params.source_account_iban,
-                        cast(str, source_account_data.get("bic_code")),
-                        holder,
-                        params.amount,
-                        params.recipient_account_iban,
-                        cast(str, external_account.get("name")),
-                        cast(str, external_account.get("bic_code")),
-                        params.motif,
-                        params.additional_motif,
+            try:
+                vop_entity_id = cast(
+                    str,
+                    regular_post(
+                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/vop",
+                        {
+                            "channel_from": "IN",
+                            "type_of_use": "VIRT",
+                            "iban_payee": params.recipient_account_iban,
+                            "bic_entity": external_account.get("bic_code"),
+                            "identifier_value": external_account.get("name"),
+                        },
+                        specific_key="vop_entity_id",
                     ),
-                    "vop_entity_id": vop_entity_id,
-                },
-            )
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
+
+            try:
+                _ = regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/control-ip",
+                    {
+                        "fraisIp": gen_transfer_packet(
+                            transfer_flow_id,
+                            params.source_account_iban,
+                            cast(str, source_account_data.get("bic_code")),
+                            holder,
+                            params.amount,
+                            params.recipient_account_iban,
+                            cast(str, external_account.get("name")),
+                            cast(str, external_account.get("bic_code")),
+                            params.motif,
+                            params.additional_motif,
+                            "",
+                        )
+                    },
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
+
+            try:
+                _ = regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/check-ip?contextId={context_id}",
+                    {
+                        "check": gen_transfer_packet(
+                            transfer_flow_id,
+                            params.source_account_iban,
+                            cast(str, source_account_data.get("bic_code")),
+                            holder,
+                            params.amount,
+                            params.recipient_account_iban,
+                            cast(str, external_account.get("name")),
+                            cast(str, external_account.get("bic_code")),
+                            params.motif,
+                            params.additional_motif,
+                        ),
+                        "vop_entity_id": vop_entity_id,
+                    },
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
 
             try_send_ip = post_ca_client_rest_api(
                 f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/send-ip",
@@ -268,31 +329,49 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
             )
 
             if try_send_ip == 401:
-                auth_by_factor_id = cast(
-                    dict[str, str],
-                    regular_post(
-                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/settings",  # Trigger SecuriPass
-                        {"authUsage": "U031"},
-                    ),
-                )
+                try:
+                    auth_by_factor_id = cast(
+                        dict[str, str],
+                        regular_post(
+                            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/settings",  # Trigger SecuriPass
+                            {"authUsage": "U031"},
+                        ),
+                    )
+                except ApiError as e:
+                    raise HTTPException(
+                        status_code=e.code,
+                        detail="Failed to call Credit Agricole API, please try again later",
+                    )
 
                 headers = auth_by_factor_id | {
                     "Referer": f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}fevir/authent-forte"
                 }
 
-                auth_method = cast(
-                    str,
-                    regular_get(
-                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/active",
-                        specific_key="method",
-                        extra_headers=headers,
-                    ),
-                )
+                try:
+                    auth_method = cast(
+                        str,
+                        regular_get(
+                            f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/active",
+                            specific_key="method",
+                            extra_headers=headers,
+                        ),
+                    )
+                except ApiError as e:
+                    raise HTTPException(
+                        status_code=e.code,
+                        detail="Failed to call Credit Agricole API, please try again later",
+                    )
 
-                _ = regular_get(
-                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/D010/request",
-                    extra_headers=headers,
-                )
+                try:
+                    _ = regular_get(
+                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/customer/authentication/factors/D010/request",
+                        extra_headers=headers,
+                    )
+                except ApiError as e:
+                    raise HTTPException(
+                        status_code=e.code,
+                        detail="Failed to call Credit Agricole API, please try again later",
+                    )
 
                 threading.Thread(
                     target=conclude_transaction,
@@ -328,19 +407,31 @@ def carry_out_transaction(params: TransactionParams) -> dict[str, str]:
                 }
             }
 
-            confirm_transfer_flow_id = cast(
-                str,
-                regular_post(
-                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
-                    transaction_package,
-                    "transfer_flow_id",
-                ),
-            )
+            try:
+                confirm_transfer_flow_id = cast(
+                    str,
+                    regular_post(
+                        f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/controle-virement?contextId={context_id}",
+                        transaction_package,
+                        "transfer_flow_id",
+                    ),
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
 
-            _ = regular_post(
-                f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
-                {"transfer_flow_id": confirm_transfer_flow_id},
-            )
+            try:
+                _ = regular_post(
+                    f"https://virement-npc-unitaire.credit-agricole.fr{load_preferences().get('regional_branch')}bffvir/creation-virement",
+                    {"transfer_flow_id": confirm_transfer_flow_id},
+                )
+            except ApiError as e:
+                raise HTTPException(
+                    status_code=e.code,
+                    detail="Failed to call Credit Agricole API, please try again later",
+                )
 
             return {"Result": "✅ Transaction carried out successfully"}
     else:

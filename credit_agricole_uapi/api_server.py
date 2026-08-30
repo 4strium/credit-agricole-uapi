@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from credit_agricole_uapi import __version__
 from credit_agricole_uapi.fetch import call_ca_client_rest_api, post_ca_client_rest_api
-from credit_agricole_uapi.globals import reboot_lock
+from credit_agricole_uapi.globals import ApiError, reboot_lock
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,10 +101,7 @@ def regular_get(
 
     data = call_ca_client_rest_api(endpoint, extra_headers)
     if isinstance(data, int):
-        raise HTTPException(
-            status_code=data, detail="Failed to call CA client REST API"
-        )
-
+        raise ApiError(data)
     if data == {}:
         return []
 
@@ -129,9 +126,7 @@ def regular_post(
 
     data = post_ca_client_rest_api(endpoint, json_data, extra_headers)
     if isinstance(data, int):
-        raise HTTPException(
-            status_code=data, detail="Failed to call CA client REST API"
-        )
+        raise ApiError(data)
 
     if data == {}:
         return []
@@ -147,22 +142,34 @@ def regular_post(
 
 
 def login_subdomain(id: str, subdomain: str) -> str:
-    encrypted_token = cast(
-        dict[str, str | int],
-        regular_post(
-            "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
-            {"id_parcours": id},
-            "context_token",
-        ),
-    )["encrypted_token"]
+    try:
+        encrypted_token = cast(
+            dict[str, str | int],
+            regular_post(
+                "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
+                {"id_parcours": id},
+                "context_token",
+            ),
+        )["encrypted_token"]
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
-    context_id = cast(
-        dict[str, str],
-        regular_post(
-            f"{subdomain}/customer/login",
-            {"token": encrypted_token},
-        ),
-    )["contextId"]
+    try:
+        context_id = cast(
+            dict[str, str],
+            regular_post(
+                f"{subdomain}/customer/login",
+                {"token": encrypted_token},
+            ),
+        )["contextId"]
+    except ApiError as e:
+        raise HTTPException(
+            status_code=e.code,
+            detail="Failed to call Credit Agricole API, please try again later",
+        )
 
     return context_id
 
