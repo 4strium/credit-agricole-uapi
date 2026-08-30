@@ -2,20 +2,21 @@ from datetime import datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 
-from credit_agricole_uapi.api_server import (
-    app,
+from credit_agricole_uapi.utils.api_helpers import (
     login_subdomain,
     regular_get,
     regular_post,
 )
+
+router = APIRouter()
 from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 from credit_agricole_uapi.utils.parsers_fetchers import parse_releve
 
 
-@app.get(
+@router.get(
     "/api/past-transactions",
     tags=["Transactions"],
     summary="Retrieve the list of the last year's transactions",

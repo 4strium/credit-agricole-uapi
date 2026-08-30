@@ -1,8 +1,10 @@
 from typing import Any, cast
 
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 
-from credit_agricole_uapi.api_server import app, regular_get
+from credit_agricole_uapi.utils.api_helpers import regular_get
+
+router = APIRouter()
 from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
 from credit_agricole_uapi.utils.cleaners import document_attributes_cleaner
@@ -16,7 +18,7 @@ from credit_agricole_uapi.utils.models import (
 from credit_agricole_uapi.utils.parsers_fetchers import document_fetcher
 
 
-@app.get(
+@router.get(
     "/api/documents-list",
     tags=["Documents"],
     summary="Get documents list",
@@ -44,7 +46,7 @@ def get_documents_list():
         return {"error": "❌ Documents submodule not enabled"}
 
 
-@app.post(
+@router.post(
     "/api/document-by-id",
     tags=["Documents"],
     summary="Download document by its ID.",
@@ -79,7 +81,7 @@ def download_document_by_id(params: DocumentRequest) -> dict[str, str]:
         return {"error": "❌ Documents submodule not enabled"}
 
 
-@app.post(
+@router.post(
     "/api/documents-by-type",
     tags=["Documents"],
     summary="Download several documents by their type.",

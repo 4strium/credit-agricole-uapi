@@ -1,12 +1,14 @@
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 
-from credit_agricole_uapi.api_server import app, regular_get
+from credit_agricole_uapi.utils.api_helpers import regular_get
+
+router = APIRouter()
 from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.utils.cleaners import bank_product_cleaner
 from credit_agricole_uapi.utils.models import GenericAccountResponse
 
 
-@app.get(
+@router.get(
     "/api/accounts",
     tags=["Account"],
     summary="Get accounts data",
@@ -28,7 +30,7 @@ def get_accounts_data():
         )
 
 
-@app.get(
+@router.get(
     "/api/insurances",
     tags=["Insurance"],
     summary="Get insurance data",
@@ -49,7 +51,7 @@ def get_insurance_data():
         )
 
 
-@app.get(
+@router.get(
     "/api/savings",
     tags=["Savings"],
     summary="Get savings data",
@@ -71,7 +73,7 @@ def get_savings_data():
         )
 
 
-@app.get(
+@router.get(
     "/api/loans",
     tags=["Loans"],
     summary="Get loans data",
@@ -92,7 +94,7 @@ def get_loans_data():
         )
 
 
-@app.get(
+@router.get(
     "/api/investments",
     tags=["Investments"],
     summary="Get investments data",

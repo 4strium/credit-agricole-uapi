@@ -7,10 +7,10 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from credit_agricole_uapi.api_server import clean_libelle, regular_get, to_float
 from credit_agricole_uapi.auth import get_local_ip
 from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
+from credit_agricole_uapi.utils.api_helpers import clean_libelle, regular_get, to_float
 
 
 def parse_releve(raw: bytes, encoding: str = "cp1252") -> dict[str, Any]:

@@ -2,14 +2,15 @@ import threading
 import time
 from typing import Any, cast
 
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 
-from credit_agricole_uapi.api_server import (
-    app,
+from credit_agricole_uapi.utils.api_helpers import (
     login_subdomain,
     regular_get,
     regular_post,
 )
+
+router = APIRouter()
 from credit_agricole_uapi.fetch import post_ca_client_rest_api
 from credit_agricole_uapi.globals import ApiError
 from credit_agricole_uapi.preferences import load_preferences
@@ -100,7 +101,7 @@ def conclude_transaction(
         )
 
 
-@app.get(
+@router.get(
     "/api/transaction-accounts",
     tags=["Transactions"],
     summary="Get transaction accounts",
@@ -150,7 +151,7 @@ def get_transaction_enabled_accounts() -> dict[str, Any]:
         return {"error": "❌ Transaction submodule not enabled"}
 
 
-@app.post(
+@router.post(
     "/api/transaction",
     tags=["Transactions"],
     summary="Carry out transaction",
