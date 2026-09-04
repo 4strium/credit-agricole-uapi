@@ -103,14 +103,14 @@ def login_subdomain(id: str, subdomain: str, context_trigger: bool = False) -> s
         encrypted_token = token_data["encrypted_token"]
 
         if context_trigger:
-            context_data = cast(dict[str, str], regular_get(f"{subdomain}/context"))
-            context_id = context_data["contextId"]
-
-            # Effectue le login sans écraser `context_id`
             _ = regular_post(
                 f"{subdomain}/customer/login",
                 {"token": encrypted_token},
             )
+          
+            context_data = cast(dict[str, str], regular_get(f"{subdomain}/context"))
+            context_id = context_data["contextId"]
+
             return context_id
         else:
             login_data = cast(
