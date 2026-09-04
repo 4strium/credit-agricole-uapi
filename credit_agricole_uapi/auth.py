@@ -1,5 +1,6 @@
 import random
 import socket
+import threading
 import time
 from typing import cast
 
@@ -87,10 +88,12 @@ def is_port_in_use(port: int) -> bool:
     return False
 
 
-def simulate_human(page: Page) -> None:
+def simulate_human(page: Page, stop_event: threading.Event | None = None) -> None:
     start_time = time.time()
     while True:
         if time.time() - start_time > 3300:
+            break
+        if stop_event is not None and stop_event.is_set():
             break
 
         try:
@@ -103,6 +106,9 @@ def simulate_human(page: Page) -> None:
 
             page.mouse.move(target_x, target_y, steps=random.randint(10, 20))
 
-            time.sleep(random.uniform(20, 40))
+            if stop_event is None:
+                time.sleep(random.uniform(20, 40))
+            elif stop_event.wait(random.uniform(20, 40)):
+                break
         except PlaywrightTimeoutError:
             break

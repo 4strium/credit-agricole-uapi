@@ -155,6 +155,27 @@ def run_background_server(port: int):
         global_keep_alive(page, context, account_id, password)
 
 
+def reboot_session(
+    page: Page, context: BrowserContext, account_id: int, password: int
+) -> None:
+    """Réinitialise complètement la session puis authentifie à nouveau l'utilisateur."""
+    reboot_lock.set_rebooting()
+    print("Rebooting...", flush=True)
+
+    page.evaluate("""
+    () => {
+        localStorage.clear();
+        sessionStorage.clear();
+    }
+    """)
+
+    context.clear_cookies()
+    urls = cast(list[str], load_preferences().get("active_subdomains_urls", []))
+    _ = page.goto(urls[0])
+    ca_login(page, account_id, password, page.url)
+    load_cookies_in_context(context, page)
+
+
 def global_keep_alive(
     page: Page, context: BrowserContext, account_id: int, password: int
 ):
@@ -166,33 +187,34 @@ def global_keep_alive(
     """
     while True:
         reboot_lock.enable_reboot()
+        stop_event = threading.Event()
+        reboot_requested = threading.Event()
 
-        ka_sso_thread = threading.Thread(target=keep_alive_sso, daemon=True)
-        ka_bff_thread = threading.Thread(target=keep_alive_bff, daemon=True)
+        ka_sso_thread = threading.Thread(
+            target=keep_alive_sso,
+            kwargs={"stop_event": stop_event},
+            daemon=True,
+        )
+        ka_bff_thread = threading.Thread(
+            target=keep_alive_bff,
+            kwargs={
+                "stop_event": stop_event,
+                "reboot_requested": reboot_requested,
+            },
+            daemon=True,
+        )
         ka_sso_thread.start()
         ka_bff_thread.start()
-        simulate_human(page)
+        simulate_human(page, stop_event)
         ka_sso_thread.join()
         ka_bff_thread.join()
 
-        while not reboot_lock.reboot_is_available():
+        while not reboot_requested.is_set() and not reboot_lock.reboot_is_available():
             time.sleep(0.1)
 
-        reboot_lock.set_rebooting()
-        print("Rebooting...", flush=True)
-
-        page.evaluate("""
-        () => {
-            localStorage.clear();
-            sessionStorage.clear();
-        }
-        """)
-
-        context.clear_cookies()
-        urls = cast(list[str], load_preferences().get("active_subdomains_urls", []))
-        _ = page.goto(urls[0])
-        ca_login(page, account_id, password, page.url)
-        load_cookies_in_context(context, page)
+        # Un 401 reçu par le ping BFF arrive ici via reboot_requested et
+        # déclenche le même reboot complet que le renouvellement périodique.
+        reboot_session(page, context, account_id, password)
 
 
 def main():

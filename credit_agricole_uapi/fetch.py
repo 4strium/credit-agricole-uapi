@@ -174,45 +174,104 @@ def post_ca_client_rest_api(
             return response.status_code
 
 
-def keep_alive_sso():
-    for _ in range(19):
-        time.sleep(180)
-        if isinstance(
-            call_ca_client_rest_api(
+def _wait_for_keep_alive(delay: float, stop_event: threading.Event | None) -> bool:
+    """Attend une durée, sauf si un autre keep-alive demande l'arrêt."""
+    if stop_event is None:
+        time.sleep(delay)
+        return False
+    return stop_event.wait(delay)
+
+
+def _call_keep_alive(
+    url: str,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any] | int | None:
+    """Exécute un keep-alive sans laisser une erreur réseau tuer son thread."""
+    try:
+        return call_ca_client_rest_api(url, extra_headers)
+    except Exception as error:  # noqa: BLE001 - thread boundary must be resilient
+        print(
+            f"Keep-alive request failed - GET @ {url}: {type(error).__name__}: {error}",
+            flush=True,
+        )
+        return None
+
+
+def keep_alive_sso(stop_event: threading.Event | None = None) -> None:
+    try:
+        for _ in range(19):
+            if _wait_for_keep_alive(180, stop_event):
+                return
+
+            result = _call_keep_alive(
                 "https://client.ca-connect.credit-agricole.fr/keepalive"
-            ),
-            int,
-        ):
-            break
+            )
+            if isinstance(result, int):
+                break
+    except Exception as error:  # noqa: BLE001 - thread boundary must be resilient
+        # Protection de dernier niveau : une exception inattendue ne doit
+        # jamais remonter jusqu'au gestionnaire de thread de Python.
+        print(
+            f"SSO keep-alive thread stopped: {type(error).__name__}: {error}",
+            flush=True,
+        )
 
 
-def keep_alive_bff():
-    time.sleep(30)
-    for _ in range(7):
-        if isinstance(
-            call_ca_client_rest_api(
-                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
-                {"correlationId": str(uuid.uuid4())},
-            ),
-            int,
-        ):
-            break
-        time.sleep(240)
-        if isinstance(
-            call_ca_client_rest_api(
-                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
-                {"correlationId": str(uuid.uuid4())},
-            ),
-            int,
-        ):
+def keep_alive_bff(
+    stop_event: threading.Event | None = None,
+    reboot_requested: threading.Event | None = None,
+) -> None:
+    def request_reboot_if_needed(result: dict[str, Any] | int | None) -> bool:
+        if result != 401:
+            return False
+        if reboot_requested is not None:
+            reboot_requested.set()
+        if stop_event is not None:
+            stop_event.set()
+        return True
+
+    try:
+        if _wait_for_keep_alive(30, stop_event):
             return
-        time.sleep(10)
-        if isinstance(
-            call_ca_client_rest_api(
+
+        for _ in range(7):
+            result = _call_keep_alive(
+                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+                {"correlationId": str(uuid.uuid4())},
+            )
+            if request_reboot_if_needed(result):
+                return
+            if isinstance(result, int):
+                break
+
+            if _wait_for_keep_alive(240, stop_event):
+                return
+
+            result = _call_keep_alive(
+                "https://espace-client.credit-agricole.fr/bff/api/security/ping",
+                {"correlationId": str(uuid.uuid4())},
+            )
+            if request_reboot_if_needed(result):
+                return
+            if isinstance(result, int):
+                return
+
+            if _wait_for_keep_alive(10, stop_event):
+                return
+
+            result = _call_keep_alive(
                 "https://espace-client.credit-agricole.fr/bff/api/security/refresh",
                 {"correlationId": str(uuid.uuid4())},
-            ),
-            int,
-        ):
-            return
-        time.sleep(229)
+            )
+            if isinstance(result, int):
+                return
+
+            if _wait_for_keep_alive(229, stop_event):
+                return
+    except Exception as error:  # noqa: BLE001 - thread boundary must be resilient
+        # Protection de dernier niveau : une exception inattendue ne doit
+        # jamais produire de traceback « Exception in thread ».
+        print(
+            f"BFF keep-alive thread stopped: {type(error).__name__}: {error}",
+            flush=True,
+        )
