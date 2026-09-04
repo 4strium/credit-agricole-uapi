@@ -90,34 +90,40 @@ def regular_post(
     return data
 
 
-def login_subdomain(id: str, subdomain: str) -> str:
+def login_subdomain(id: str, subdomain: str, context_trigger: bool = False) -> str:
     try:
-        encrypted_token = cast(
+        token_data = cast(
             dict[str, str | int],
             regular_post(
                 "https://espace-client.credit-agricole.fr/bff/api/context/sso/v2",
                 {"id_parcours": id},
                 "context_token",
             ),
-        )["encrypted_token"]
-    except ApiError as e:
-        raise HTTPException(
-            status_code=e.code,
-            detail="Failed to call Credit Agricole API, please try again later",
         )
+        encrypted_token = token_data["encrypted_token"]
 
-    try:
-        context_id = cast(
-            dict[str, str],
-            regular_post(
+        if context_trigger:
+            context_data = cast(dict[str, str], regular_get(f"{subdomain}/context"))
+            context_id = context_data["contextId"]
+
+            # Effectue le login sans écraser `context_id`
+            _ = regular_post(
                 f"{subdomain}/customer/login",
                 {"token": encrypted_token},
-            ),
-        )["contextId"]
+            )
+            return context_id
+        else:
+            login_data = cast(
+                dict[str, str],
+                regular_post(
+                    f"{subdomain}/customer/login",
+                    {"token": encrypted_token},
+                ),
+            )
+            return login_data["contextId"]
+
     except ApiError as e:
         raise HTTPException(
             status_code=e.code,
             detail="Failed to call Credit Agricole API, please try again later",
         )
-
-    return context_id

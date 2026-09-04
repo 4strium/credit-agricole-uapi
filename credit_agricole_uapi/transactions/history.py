@@ -31,6 +31,7 @@ def get_transactions() -> list[dict[str, Any]] | dict[str, str]:
         context_id = login_subdomain(
             "TELECHARGER-OPERATIONS",
             f"https://telechargement-operations.credit-agricole.fr{load_preferences().get('regional_branch')}bff",
+            True,
         )
 
         try:
